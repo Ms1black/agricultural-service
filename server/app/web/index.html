@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Автополив</title>
+<style>
+  :root { --bg:#f4f3ee; --ink:#121212; --muted:#696964; --faint:#d2d2cc; --accent:#2f7d4f; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.4 system-ui, sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:16px; }
+  header { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;
+           border-bottom:2px solid var(--ink); padding-bottom:8px; margin-bottom:16px; }
+  h1 { font-size:20px; margin:0; }
+  h2 { font-size:16px; margin:24px 0 8px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:8px; }
+  .cell { border:1px solid var(--faint); border-radius:6px; padding:10px 12px; background:#fff8; }
+  .cell .label { color:var(--muted); font-size:12px; }
+  .cell .value { font-size:28px; font-weight:700; }
+  .cell.alert { background:var(--ink); color:var(--bg); }
+  .cell.alert .label { color:var(--bg); }
+  .muted { color:var(--muted); font-size:13px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  button, select, input { font:inherit; padding:6px 10px; border:1px solid var(--ink);
+                          border-radius:4px; background:#fff; }
+  button { cursor:pointer; background:var(--ink); color:var(--bg); }
+  button.ghost { background:#fff; color:var(--ink); }
+  input[type=number] { width:90px; }
+  svg { width:100%; height:220px; background:#fff8; border:1px solid var(--faint); border-radius:6px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td, th { text-align:left; padding:4px 6px; border-bottom:1px solid var(--faint); }
+  #msg { min-height:1.4em; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Автополив</h1>
+    <div class="row">
+      <label>Устройство <select id="device"><option>plant1</option></select></label>
+      <span id="online" class="muted"></span>
+    </div>
+  </header>
+
+  <div class="grid">
+    <div class="cell" id="c-soil"><div class="label">Почва, %</div><div class="value" id="soil">--</div></div>
+    <div class="cell"><div class="label">Температура, °C</div><div class="value" id="temp">--</div></div>
+    <div class="cell"><div class="label">Влажность воздуха, %</div><div class="value" id="hum">--</div></div>
+    <div class="cell"><div class="label">Последний полив</div><div class="value" id="watered">--</div></div>
+  </div>
+  <p class="muted" id="raw"></p>
+
+  <h2>Влажность почвы</h2>
+  <div class="row">
+    <select id="hours">
+      <option value="6">6 ч</option><option value="24" selected>24 ч</option>
+      <option value="72">3 дня</option><option value="168">неделя</option>
+    </select>
+  </div>
+  <svg id="chart" viewBox="0 0 900 220" preserveAspectRatio="none"></svg>
+
+  <h2>Полив</h2>
+  <div class="row">
+    <input type="number" id="seconds" min="1" max="10" value="3"> с
+    <button id="water">Полить</button>
+    <span class="muted">Команда уйдёт с ближайшей телеметрией (до 30 с), действует 2 мин.</span>
+  </div>
+
+  <h2>Калибровка датчика</h2>
+  <div class="row">
+    Сухо <input type="number" id="dry" min="0" max="4095">
+    Мокро <input type="number" id="wet" min="0" max="4095">
+    <button id="cal-save">Сохранить</button>
+    <button class="ghost" id="cal-dry">Сейчас сухо</button>
+    <button class="ghost" id="cal-wet">Только что полили</button>
+  </div>
+  <p id="msg" class="muted"></p>
+
+  <h2>События</h2>
+  <table><thead><tr><th>Время</th><th>Тип</th><th>Значение</th><th>Причина</th></tr></thead>
+    <tbody id="events"></tbody></table>
+
+  <h2>Данные</h2>
+  <div class="row">
+    <a href="web/api/export.csv?table=measurements">measurements.csv</a>
+    <a href="web/api/export.csv?table=events">events.csv</a>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const dev = () => $('device').value;
+const fmtTime = ts => new Date(ts * 1000).toLocaleString('ru-RU');
+const NOTES = { auto:'авто', 'auto-D0':'авто (D0)', claps:'хлопки', web:'веб', manual:'вручную',
+                voice:'голос', ml:'модель', start:'запуск' };
+
+function ago(sec) {
+  const m = Math.floor(sec / 60);
+  if (m < 1) return 'сейчас';
+  if (m < 60) return m + ' мин';
+  if (m < 48 * 60) return Math.floor(m / 60) + ' ч';
+  return Math.floor(m / 1440) + ' дн';
+}
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method:'POST', headers:{'Content-Type':'application/json'},
+                                       body: JSON.stringify(body) } : {});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || r.status);
+  return data;
+}
+
+function say(text) { $('msg').textContent = text; }
+
+async function loadDevices() {
+  const list = await api('web/api/devices');
+  if (!list.length) return;
+  const cur = dev();
+  $('device').innerHTML = list.map(d => `<option>${d}</option>`).join('');
+  if (list.includes(cur)) $('device').value = cur;
+}
+
+async function loadState() {
+  const s = await api('web/api/state?device=' + encodeURIComponent(dev()));
+  const m = s.latest;
+  if (m) {
+    const age = s.now - m.ts;
+    $('online').textContent = (age < 120 ? 'на связи' : 'нет данных ' + ago(age)) +
+                              ' · ' + fmtTime(m.ts);
+    $('soil').textContent = m.soil_ok ? m.soil_pct : (m.soil_dry_d0 ? 'СУХО' : 'МОКРО');
+    $('c-soil').classList.toggle('alert', m.soil_ok ? m.soil_pct < 30 : !!m.soil_dry_d0);
+    $('temp').textContent = m.temp == null ? '--' : m.temp.toFixed(1);
+    $('hum').textContent = m.air_hum == null ? '--' : Math.round(m.air_hum);
+    $('raw').textContent = `Сырое значение датчика: ${m.soil_raw ?? '--'}` +
+                           (s.pending ? ` · ждёт полив ${s.pending.seconds} с` : '');
+  } else {
+    $('online').textContent = 'данных пока нет';
+  }
+  const w = s.events.find(e => e.type === 'water');
+  $('watered').textContent = w ? ago(s.now - w.ts) : '--';
+  if (s.calibration && document.activeElement.tagName !== 'INPUT') {
+    $('dry').value = s.calibration.dry_raw;
+    $('wet').value = s.calibration.wet_raw;
+  }
+  $('events').innerHTML = s.events.map(e =>
+    `<tr><td>${fmtTime(e.ts)}</td><td>${e.type}</td><td>${e.value ?? ''}</td>` +
+    `<td>${NOTES[e.note] || e.note || ''}</td></tr>`).join('');
+}
+
+async function loadChart() {
+  const hours = +$('hours').value;
+  const rows = (await api(`web/api/history?device=${encodeURIComponent(dev())}&hours=${hours}`))
+    .filter(r => r.soil_ok);
+  const svg = $('chart'), W = 900, H = 220, P = 24;
+  const now = Date.now() / 1000, t0 = now - hours * 3600;
+  const x = t => P + (t - t0) / (now - t0) * (W - 2 * P);
+  const y = v => H - P - v / 100 * (H - 2 * P);
+  let g = '';
+  for (const v of [0, 30, 50, 100]) {
+    g += `<line x1="${P}" x2="${W - P}" y1="${y(v)}" y2="${y(v)}" stroke="${v === 30 ? '#c44' : '#ddd'}"
+           stroke-dasharray="${v === 30 ? '4 4' : ''}"/><text x="2" y="${y(v) + 4}" font-size="11"
+           fill="#696964">${v}</text>`;
+  }
+  if (rows.length > 1) {
+    const pts = rows.map(r => `${x(r.ts).toFixed(1)},${y(r.soil_pct).toFixed(1)}`).join(' ');
+    g += `<polyline points="${pts}" fill="none" stroke="#121212" stroke-width="2"
+           vector-effect="non-scaling-stroke"/>`;
+  } else {
+    g += `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="#696964">Нет данных</text>`;
+  }
+  svg.innerHTML = g;
+}
+
+async function refresh() {
+  try { await loadState(); await loadChart(); } catch (e) { say('Ошибка: ' + e.message); }
+}
+
+$('water').onclick = async () => {
+  try {
+    const r = await api('web/api/water', { device: dev(), seconds: +$('seconds').value });
+    say(`Полив ${r.seconds} с поставлен в очередь`);
+    refresh();
+  } catch (e) { say('Ошибка: ' + e.message); }
+};
+async function calibrate(body) {
+  try {
+    const r = await api('web/api/calibration', { device: dev(), ...body });
+    say(`Калибровка: сухо ${r.dry_raw}, мокро ${r.wet_raw}. Устройство получит её с телеметрией.`);
+    $('dry').value = r.dry_raw; $('wet').value = r.wet_raw;
+  } catch (e) { say('Ошибка: ' + e.message); }
+}
+$('cal-save').onclick = () => calibrate({ dry_raw: +$('dry').value, wet_raw: +$('wet').value });
+$('cal-dry').onclick = () => calibrate({ use_current: 'dry' });
+$('cal-wet').onclick = () => calibrate({ use_current: 'wet' });
+$('device').onchange = refresh;
+$('hours').onchange = loadChart;
+
+loadDevices().then(refresh);
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>

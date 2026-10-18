@@ -1,0 +1,13 @@
+services:
+  plant:
+    build: .
+    image: plant-service
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${PLANT_PORT:-8000}:8000"
+    volumes:
+      - plant-data:/data
+
+volumes:
+  plant-data:
