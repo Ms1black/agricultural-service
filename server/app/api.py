@@ -6,6 +6,7 @@
 
 import json
 import logging
+import time
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -28,6 +29,14 @@ class Telemetry(BaseModel):
     soil_pct: int | None = None
     soil_ok: bool = False
     soil_dry: bool = False
+    # F2: замер из офлайн-буфера — сколько секунд назад он сделан (сервер ставит ts = now − age_s)
+    age_s: int | None = None
+    uptime_s: int | None = None
+    fw_version: str | None = None
+
+
+# Замер старше — только сохранить: решения по устаревшим данным не принимаются (раздел 5)
+LIVE_AGE_S = 60
 
 
 class Event(BaseModel):
@@ -53,34 +62,51 @@ def telemetry(t: Telemetry, request: Request) -> Response:
     if cal and m["soil_ok"] and m["soil_raw"] is not None:
         # Проценты считает сервер по своей калибровке (C1) — та же формула, что в прошивке
         m["soil_pct"] = calibration.percent(m["soil_raw"], cal["dry_raw"], cal["wet_raw"])
-    store.save_measurement(db, m)
+    age = max(0, t.age_s or 0)
+    store.save_measurement(db, m, time.time() - age)
+    if age <= LIVE_AGE_S:
+        live_steps(db, t.device)
+    return compact_json(telemetry_response(db, settings, t.device))
+
+
+def live_steps(db, device: str) -> None:
+    """Калибровка, решение, мониторинг — только по свежему замеру; ошибки не ломают приём."""
     try:
-        calibration.on_telemetry(db, t.device)
+        calibration.on_telemetry(db, device)
     except Exception:  # калибровка не должна ломать приём телеметрии
         logging.getLogger("calibration").exception("ошибка шага калибровки")
     try:
-        decision.step(db, t.device)
+        decision.step(db, device)
     except Exception:  # без решения сервера устройство поливает по своему порогу
         logging.getLogger("decision").exception("ошибка модуля решений")
     try:
         from .ml import monitor
-        monitor.on_telemetry(db, t.device)
+        monitor.on_telemetry(db, device)
     except Exception:
         logging.getLogger("ml").exception("ошибка мониторинга прогноза")
 
+
+def telemetry_response(db, settings, device: str) -> dict:
     resp: dict = {"command": "none"}
-    cmd = store.take_command(db, t.device, settings.command_ttl_s)
+    cmd = store.take_command(db, device, settings.command_ttl_s)
     if cmd:
         resp = {"command": "water", "seconds": cmd["seconds"]}
-    cal = store.get_calibration(db, t.device)
+    cal = store.get_calibration(db, device)
     if cal:
         resp["dry"] = cal["dry_raw"]
         resp["wet"] = cal["wet_raw"]
         if 1 <= (cal.get("stage") or 0) <= 3:
             resp["calib_stage"] = cal["stage"]       # F3: полоса Calibrating N/3
-    if decision.active_mode(db, t.device) == "ml":
+    if decision.active_mode(db, device) == "ml":
         resp["mode"] = "ml"                          # D0: локальный автополив молчит
-    return compact_json(resp)
+    try:
+        from .ml.forecast import cached_forecast
+        fc = cached_forecast(db, device, (cal or {}).get("target_low") or 30.0)
+        if fc.get("status") == "ok" and fc.get("next_water_ts"):
+            resp["next_water_h"] = int(round(fc["hours_to_threshold"]))   # F3: ячейка Next
+    except Exception:
+        logging.getLogger("ml").exception("ошибка прогноза для устройства")
+    return resp
 
 
 @router.get("/forecast")

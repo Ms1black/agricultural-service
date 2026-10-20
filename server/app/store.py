@@ -8,13 +8,13 @@ from .db import Database
 MAX_WATER_SECONDS = 10
 
 
-def save_measurement(db: Database, m: dict) -> None:
+def save_measurement(db: Database, m: dict, ts: float | None = None) -> None:
     with db.conn() as c:
         c.execute(
             """INSERT INTO measurements
                (ts, device, temp, air_hum, soil_raw, soil_pct, soil_ok, soil_dry_d0)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (time.time(), m["device"], m["temp"], m["air_hum"], m["soil_raw"],
+            (ts or time.time(), m["device"], m["temp"], m["air_hum"], m["soil_raw"],
              m["soil_pct"], int(m["soil_ok"]), int(m["soil_dry"])),
         )
 

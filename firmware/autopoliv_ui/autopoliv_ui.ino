@@ -11,6 +11,8 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <DNSServer.h>
+#include <ArduinoJson.h>
+#include <time.h>
 #include <utility>
 
 // ===== Wi-Fi и сервер =====
@@ -25,6 +27,7 @@ const char* SERVER     = "";
 const char* API_TOKEN  = "";
 #endif
 const char* DEVICE_ID  = "plant1";
+const char* FW_VERSION = "1.1.0";
 
 // ===== Режим настройки =====
 // Нет сети / не подключился за 10 с / 3 хлопка → точка доступа, форма на http://192.168.4.1
@@ -126,6 +129,25 @@ volatile int micPeak = 0;
 
 unsigned long lastWater = 0;
 bool everWatered = false;
+time_t lastWaterEpoch = 0;          // время последнего полива по часам (NTP), хранится в Preferences
+
+// ===== Ответ сервера (F2: ArduinoJson) =====
+int nextWaterH = -1;                // прогноз: через сколько часов полив (-1 — нет прогноза)
+unsigned long nextWaterAt = 0;      // когда получен прогноз
+int calibStage = 0;                 // 1–3 — идёт калибровка
+
+// ===== Офлайн-буфер телеметрии (F2) =====
+// Сервер недоступен — замеры копятся в RAM и досылаются с полем age_s
+struct Sample {
+  unsigned long ms;
+  float temp, hum;
+  int raw, pct;
+  bool dry;
+};
+const int BUF_N = 240;              // 240 × 30 с = 2 часа
+Sample sampleBuf[BUF_N];
+int bufHead = 0, bufCount = 0;
+const int FLUSH_PER_SEND = 10;      // за раз досылаем не больше 10, чтобы не тормозить экран
 
 float curTemp = NAN, curHum = NAN;
 int   curSoil = -1;
@@ -369,9 +391,13 @@ void drawCell(int x, int y, int w, int h, const char* label, bool degree, const 
   canvas.drawString(value, x + 5, y + h - 4);
 }
 
+bool clockOk() { return time(nullptr) > 1700000000; }
+
 String agoText() {
-  if (!everWatered) return "--";
-  unsigned long m = (millis() - lastWater) / 60000;
+  unsigned long m;
+  if (everWatered) m = (millis() - lastWater) / 60000;
+  else if (lastWaterEpoch > 0 && clockOk()) m = (time(nullptr) - lastWaterEpoch) / 60;
+  else return "--";
   if (m < 1) return "now";
   if (m < 60) return String(m) + "m";
   if (m < 48 * 60) return String(m / 60) + "h";
@@ -437,16 +463,6 @@ String numOrNull(float v, int digits) {
   return isnan(v) ? String("null") : String(v, digits);
 }
 
-int jsonInt(const String& s, const char* key, int def) {
-  String k = String("\"") + key + "\":";
-  int i = s.indexOf(k);
-  if (i < 0) return def;
-  String rest = s.substring(i + k.length());
-  rest.trim();
-  if (rest.startsWith("null")) return def;
-  return rest.toInt();
-}
-
 bool postJson(const char* path, const String& body, String* response) {
   wifiOk = (WiFi.status() == WL_CONNECTED);
   if (!wifiOk || cfgServer.length() == 0) return false;
@@ -478,28 +494,44 @@ void water(String reason, unsigned long ms = WATER_MS) {
   digitalWrite(PIN_RELAY, RELAY_OFF);
   lastWater = millis();
   everWatered = true;
+  if (clockOk()) {                     // время полива переживает перезагрузку
+    lastWaterEpoch = time(nullptr);
+    prefs.begin("state", false);
+    prefs.putLong64("water_ts", lastWaterEpoch);
+    prefs.end();
+  }
   clapCount = 0;
   toast("Watering done");
   sendEvent("water", ms / 1000.0, reason);
 }
 
+void handleResponse(const String& resp);
+String telemetryJson(float temp, float hum, int raw, int pct, bool dry, long ageS);
+void bufferSample();
+void flushBuffer();
+
 void sendTelemetry() {
-  String body = "{";
-  body += "\"device\":\"" + String(DEVICE_ID) + "\",";
-  body += "\"temp\":" + numOrNull(curTemp, 2) + ",";
-  body += "\"air_hum\":" + numOrNull(curHum, 2) + ",";
-  body += "\"soil_raw\":" + String(soilRaw) + ",";
-  body += "\"soil_pct\":" + String(curSoil) + ",";
-  body += "\"soil_ok\":" + String(curSoil >= 0 ? "true" : "false") + ",";
-  body += "\"soil_dry\":" + String(soilDry ? "true" : "false");
-  body += "}";
+  String body = telemetryJson(curTemp, curHum, soilRaw, curSoil, soilDry, 0);
 
   String resp;
   serverOk = postJson("/api/telemetry", body, &resp);
-  if (!serverOk) return;
+  if (!serverOk) {
+    bufferSample();
+    return;
+  }
+  handleResponse(resp);
+  flushBuffer();
+}
 
-  int dry = jsonInt(resp, "dry", soilDryCal);
-  int wet = jsonInt(resp, "wet", soilWetCal);
+// Ответ на телеметрию (контракт 4.1): {"command":"water","seconds":3,"dry":3900,"wet":1300,…}
+void handleResponse(const String& resp) {
+  JsonDocument doc;
+  if (deserializeJson(doc, resp)) {
+    Serial.println("Сервер: не удалось разобрать ответ");
+    return;
+  }
+  int dry = doc["dry"] | soilDryCal;
+  int wet = doc["wet"] | soilWetCal;
   if (dry != wet && (dry != soilDryCal || wet != soilWetCal)) {
     soilDryCal = dry;
     soilWetCal = wet;
@@ -507,14 +539,53 @@ void sendTelemetry() {
     toast("Calibration updated");
   }
 
-  bool ml = resp.indexOf("\"mode\":\"ml\"") >= 0;
+  bool ml = doc["mode"] == "ml";
   if (ml != serverMl) Serial.printf("Режим полива: %s\n", ml ? "ml (решает сервер)" : "порог");
   serverMl = ml;
   if (ml) serverMlAt = millis();
 
-  if (resp.indexOf("\"command\":\"water\"") >= 0) {
-    int sec = constrain(jsonInt(resp, "seconds", 3), 1, 10);
+  calibStage = doc["calib_stage"] | 0;
+  nextWaterH = doc["next_water_h"] | -1;
+  nextWaterAt = millis();
+
+  if (doc["command"] == "water") {
+    int sec = constrain(doc["seconds"] | 3, 1, 10);
     water("web", sec * 1000UL);
+  }
+}
+
+String telemetryJson(float temp, float hum, int raw, int pct, bool dry, long ageS) {
+  String body = "{";
+  body += "\"device\":\"" + String(DEVICE_ID) + "\",";
+  body += "\"temp\":" + numOrNull(temp, 2) + ",";
+  body += "\"air_hum\":" + numOrNull(hum, 2) + ",";
+  body += "\"soil_raw\":" + String(raw) + ",";
+  body += "\"soil_pct\":" + String(pct) + ",";
+  body += "\"soil_ok\":" + String(pct >= 0 ? "true" : "false") + ",";
+  body += "\"soil_dry\":" + String(dry ? "true" : "false") + ",";
+  if (ageS > 0) body += "\"age_s\":" + String(ageS) + ",";
+  body += "\"uptime_s\":" + String(millis() / 1000) + ",";
+  body += "\"fw_version\":\"" + String(FW_VERSION) + "\"";
+  body += "}";
+  return body;
+}
+
+void bufferSample() {
+  sampleBuf[bufHead] = {millis(), curTemp, curHum, soilRaw, curSoil, soilDry};
+  bufHead = (bufHead + 1) % BUF_N;
+  if (bufCount < BUF_N) bufCount++;    // переполнение — затираем самые старые
+}
+
+// Досылка накопленного: от старых к новым; ответы на старые замеры не исполняем —
+// по устаревшим данным сервер решений не принимает
+void flushBuffer() {
+  for (int k = 0; k < FLUSH_PER_SEND && bufCount > 0; k++) {
+    int i = (bufHead - bufCount + BUF_N) % BUF_N;
+    const Sample& s = sampleBuf[i];
+    long age = (millis() - s.ms) / 1000;
+    if (!postJson("/api/telemetry", telemetryJson(s.temp, s.hum, s.raw, s.pct, s.dry, age),
+                  nullptr)) return;
+    bufCount--;
   }
 }
 
@@ -713,6 +784,7 @@ void connectWiFi() {
     Serial.print("Wi-Fi подключён, IP: ");
     Serial.println(WiFi.localIP());
     toast("WiFi " + WiFi.localIP().toString());
+    configTime(0, 0, "pool.ntp.org", "time.google.com");   // часы — для времени полива
   } else {
     Serial.println("Wi-Fi не подключился, включаю режим настройки");
     startSetup();
@@ -777,6 +849,9 @@ void setup() {
   if (!ahtOk) Serial.println("AHT20 не найден");
 
   loadConfig();
+  prefs.begin("state", true);
+  lastWaterEpoch = prefs.getLong64("water_ts", 0);
+  prefs.end();
   connectWiFi();
 
   xTaskCreatePinnedToCore(micTask, "mic", 4096, NULL, 1, NULL, 0);
