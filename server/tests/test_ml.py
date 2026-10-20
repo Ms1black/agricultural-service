@@ -218,3 +218,17 @@ def test_llm_context_includes_forecast(app, device):
     from app.llm.context import describe
     device.post("/api/telemetry", json=TELEMETRY)
     assert "Прогноз" in describe(app.state.db, "plant1")
+
+
+# ----- симуляция политик (6.4) -----
+
+def test_policy_simulation_threshold_vs_ml():
+    from app.ml import policy_sim
+    df = prepare(sawtooth(rate=1.0, days=12, noise=0.2))
+    thr = policy_sim.simulate(df, "threshold")
+    ml = policy_sim.simulate(df, "ml")                   # без модели — линейный прогноз
+    assert thr["mean_soil"] < 40 < ml["mean_soil"]       # порог держит почву у края
+    assert ml["waterings"] < thr["waterings"] / 2
+    assert ml["in_range_share"] > 0.9 and ml["hours_wet"] == 0
+    total = policy_sim.compare([df], None)["total"]
+    assert total["ml"]["waterings"] == ml["waterings"]

@@ -107,6 +107,18 @@
     <span class="muted">Команда уйдёт с ближайшей телеметрией (до 30 с), действует 2 мин.</span>
   </div>
 
+  <h2>Режим полива</h2>
+  <div class="row">
+    <select id="mode">
+      <option value="threshold">По порогу 30 % (решает устройство)</option>
+      <option value="ml">По прогнозу ИИ (решает сервер)</option>
+    </select>
+    <span id="mode-msg" class="muted"></span>
+  </div>
+  <h2>Журнал решений</h2>
+  <table><thead><tr><th>Время</th><th>Решение</th><th>Причина</th></tr></thead>
+    <tbody id="decisions"></tbody></table>
+
   <h2>Калибровка под растение</h2>
   <div class="steps" id="cal-steps">
     <div>0. Профиль</div><div>1. Датчик</div><div>2. Доза</div><div>3. Высыхание</div><div>Готово</div>
@@ -275,7 +287,7 @@ async function loadChart() {
 }
 
 async function refresh() {
-  try { await loadState(); await loadChart(); await loadCalibration(); }
+  try { await loadState(); await loadChart(); await loadCalibration(); await loadDecisions(); }
   catch (e) { say('Ошибка: ' + e.message); }
 }
 
@@ -407,6 +419,30 @@ $('talk').onclick = async () => {
   const limit = setTimeout(() => recorder && recorder.stop(), 8000);   // фраза ≤ 8 с
   $('talk').classList.add('rec'); $('talk').textContent = 'Стоп';
   $('voice-msg').textContent = 'Слушаю… (до 8 с)';
+};
+
+// ----- режим полива и журнал решений (D0) -----
+const ACTIONS = { water:'полив', blocked:'не поливать', mode:'режим' };
+async function loadDecisions() {
+  const q = 'device=' + encodeURIComponent(dev());
+  const [m, list] = await Promise.all([api('web/api/mode?' + q), api('web/api/decisions?' + q)]);
+  if (document.activeElement !== $('mode')) $('mode').value = m.mode;
+  $('mode-msg').textContent = m.mode === 'ml' && !m.ml_available
+    ? 'Пока действует порог: ' + m.ml_reason : (m.active === 'ml'
+      ? 'Сервер поливает по прогнозу; без связи > 10 мин устройство вернётся к порогу.' : '');
+  $('decisions').innerHTML = '';
+  for (const d of list) {
+    const tr = document.createElement('tr');
+    for (const v of [fmtTime(d.ts), (ACTIONS[d.action] || d.action) +
+                     (d.action === 'water' ? ` ${d.seconds} с` : ''), d.reason]) {
+      const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
+    }
+    $('decisions').appendChild(tr);
+  }
+}
+$('mode').onchange = async () => {
+  try { await api('web/api/mode', { device: dev(), mode: $('mode').value }); await loadDecisions(); }
+  catch (e) { say('Режим: ' + e.message); }
 };
 
 // ----- калибровка под растение (C1) -----

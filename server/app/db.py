@@ -103,6 +103,24 @@ MIGRATIONS: list[list[str]] = [
             updated REAL NOT NULL
         )""",
     ],
+    # 5 — модуль решений (D0)
+    [
+        """CREATE TABLE IF NOT EXISTS device_settings (
+            device TEXT PRIMARY KEY,
+            mode TEXT NOT NULL DEFAULT 'threshold',
+            updated REAL NOT NULL
+        )""",
+        """CREATE TABLE IF NOT EXISTS decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            device TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            action TEXT NOT NULL,
+            seconds REAL,
+            reason TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_decisions_device_ts ON decisions(device, ts)",
+    ],
 ]
 
 

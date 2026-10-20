@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .. import calibration as cb
-from .. import store
+from .. import decision, store
 from ..auth import require_web
 from ..llm import LLMError
 from ..llm.context import build_messages
@@ -229,6 +229,29 @@ def calibration_action(action: str, request: Request, device: str = "plant1") ->
     except ValueError as e:
         raise HTTPException(409, str(e)) from e
     return calibration_state(db, device)
+
+
+class ModeRequest(BaseModel):
+    device: str = "plant1"
+    mode: str
+
+
+@router.get("/web/api/mode")
+def mode_get(request: Request, device: str = "plant1") -> dict:
+    return decision.status(request.app.state.db, device)
+
+
+@router.post("/web/api/mode")
+def mode_set(req: ModeRequest, request: Request) -> dict:
+    try:
+        return decision.set_mode(request.app.state.db, req.device, req.mode)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.get("/web/api/decisions")
+def decisions(request: Request, device: str = "plant1") -> list[dict]:
+    return decision.recent(request.app.state.db, device)
 
 
 @router.get("/web/api/export.csv")
