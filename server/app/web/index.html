@@ -73,7 +73,9 @@
 <body>
 <main>
   <header>
-    <h1>Автополив</h1>
+    <h1>Автополив <span id="demo-badge" hidden
+        style="background:var(--ink);color:var(--bg);font-size:13px;padding:2px 6px;border-radius:3px;
+        vertical-align:middle">DEMO</span></h1>
     <div class="row">
       <label>Данные <select id="device"><option value="plant1">устройство plant1</option></select></label>
       <span id="online" class="muted"></span>
@@ -254,6 +256,7 @@ async function loadDevices() {
 
 async function loadState() {
   const s = await api('web/api/state?device=' + encodeURIComponent(dev()));
+  $('demo-badge').hidden = !s.demo;
   const m = s.latest;
   if (m) {
     const age = s.now - m.ts;

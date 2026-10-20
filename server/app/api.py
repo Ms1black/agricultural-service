@@ -99,6 +99,8 @@ def telemetry_response(db, settings, device: str) -> dict:
             resp["calib_stage"] = cal["stage"]       # F3: полоса Calibrating N/3
     if decision.active_mode(db, device) == "ml":
         resp["mode"] = "ml"                          # D0: локальный автополив молчит
+    if settings.demo_mode:
+        resp["demo"] = 1                             # D1: метка DEMO на экране устройства
     try:
         from .ml.forecast import cached_forecast
         fc = cached_forecast(db, device, (cal or {}).get("target_low") or 30.0)

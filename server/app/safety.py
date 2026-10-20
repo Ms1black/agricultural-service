@@ -14,6 +14,16 @@ MIN_INTERVAL_S = 30 * 60                         # между поливами �
 MAX_PER_DAY = 6
 MAX_SOIL_PCT = 70                                # влажнее — не поливать
 FRESH_DATA_S = 120                               # нет свежих данных — решений не принимать
+# D1: демо-режим — только явным флагом DEMO_MODE и с пометкой DEMO на экране и в вебе.
+# Уменьшает лишь интервал между поливами сервера/голоса; 10 с, 70 %, 6 в сутки — как всегда.
+DEMO_MIN_INTERVAL_S = 2 * 60
+demo_mode = False
+
+
+def min_interval_s() -> float:
+    return DEMO_MIN_INTERVAL_S if demo_mode else MIN_INTERVAL_S
+
+
 # Поливы, которые считаются «по решению сервера / голосу»
 SERVER_REASONS = ("voice", "ml", "web", "calib")
 
@@ -26,8 +36,9 @@ class Verdict:
 
 
 def check(db: Database, device: str, seconds: float, now: float | None = None,
-          max_per_day: int = MAX_PER_DAY, min_interval_s: float = MIN_INTERVAL_S) -> Verdict:
+          max_per_day: int = MAX_PER_DAY) -> Verdict:
     now = now or time.time()
+    interval = min_interval_s()
     seconds = int(max(1, min(MAX_WATER_SECONDS, round(seconds))))
     m = store.latest_measurement(db, device)
     if not m or now - m["ts"] > FRESH_DATA_S:
@@ -49,8 +60,8 @@ def check(db: Database, device: str, seconds: float, now: float | None = None,
     if len(rows) >= max_per_day:
         return Verdict(False, 0, f"сегодня уже {len(rows)} поливов — это максимум")
     last_server = next((r["ts"] for r in rows if r["note"] in SERVER_REASONS), None)
-    if last_server and now - last_server < min_interval_s:
-        wait = int((min_interval_s - (now - last_server)) // 60) + 1
+    if last_server and now - last_server < interval:
+        wait = int((interval - (now - last_server)) // 60) + 1
         return Verdict(False, 0, f"недавно уже поливали, следующий полив — через {wait} мин")
     return Verdict(True, seconds, "можно поливать")
 

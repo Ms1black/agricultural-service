@@ -195,3 +195,24 @@ def test_voice_accepts_chunked_upload_like_device(voice_app, device):
     assert r.status_code == 200
     audio = voice_app.state.stt.seen[0]
     assert len(audio) == RATE                                  # все 16000 отсчётов дошли
+
+
+def test_demo_mode_shortens_only_interval(app, device):
+    """D1: явный флаг — интервал 2 мин вместо 30, остальные лимиты прежние; DEMO в ответе."""
+    db = app.state.db
+    device.post("/api/telemetry", json={**TELEMETRY, "soil_pct": 40})
+    store.save_event(db, "plant1", "water", 3, "voice")
+    with db.conn() as c:
+        c.execute("UPDATE events SET ts = ts - 300")                 # 5 мин назад
+    assert not safety.check(db, "plant1", 3).ok
+    safety.demo_mode = True
+    try:
+        assert safety.check(db, "plant1", 3).ok
+        assert safety.check(db, "plant1", 30).seconds == 10        # 10 с — как всегда
+        app.state.settings = app.state.settings.__class__(
+            **{**app.state.settings.__dict__, "demo_mode": True})
+        assert '"demo":1' in device.post("/api/telemetry", json={**TELEMETRY,
+                                                                 "soil_pct": 75}).text
+        assert not safety.check(db, "plant1", 3).ok                 # > 70 % — как всегда
+    finally:
+        safety.demo_mode = False
