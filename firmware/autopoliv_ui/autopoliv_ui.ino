@@ -752,7 +752,28 @@ input,button{width:100%;box-sizing:border-box;padding:10px;margin:4px 0 12px;fon
 li{padding:8px;border-bottom:1px solid #ddd;cursor:pointer;list-style:none}ul{padding:0}
 small{color:#666}</style></head><body>)html";
 
+// Журнал режима настройки в монитор порта: видно, доходят ли запросы телефона
+void logRequest() {
+  Serial.printf("Веб: %s http://%s%s от %s\n", web.method() == HTTP_POST ? "POST" : "GET",
+                web.hostHeader().c_str(), web.uri().c_str(),
+                web.client().remoteIP().toString().c_str());
+}
+
+void onApEvent(arduino_event_id_t event, arduino_event_info_t info) {
+  if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED) {
+    const uint8_t* m = info.wifi_ap_staconnected.mac;
+    Serial.printf("Точка: подключился %02X:%02X:%02X:%02X:%02X:%02X\n",
+                  m[0], m[1], m[2], m[3], m[4], m[5]);
+  } else if (event == ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED) {
+    Serial.printf("Точка: выдан адрес %s\n",
+                  IPAddress(info.wifi_ap_staipassigned.ip.addr).toString().c_str());
+  } else if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
+    Serial.println("Точка: клиент отключился");
+  }
+}
+
 void handleRoot() {
+  logRequest();
   refreshScan(web.hasArg("scan"));
   String p = FPSTR(PAGE_HEAD);
   p += "<h2>Настройка автополива</h2><form id=f method=post action=/save>";
@@ -774,6 +795,7 @@ void handleRoot() {
 }
 
 void handleSave() {
+  logRequest();
   String ssid = web.arg("ssid");
   ssid.trim();
   if (ssid.length() == 0) {
@@ -801,6 +823,7 @@ void handleSave() {
 
 // Любой адрес → форма (телефон сам откроет страницу входа в сеть)
 void handleRedirect() {
+  logRequest();
   web.sendHeader("Location", "http://" + WiFi.softAPIP().toString() + "/", true);
   web.send(302, "text/plain", "");
 }
@@ -817,6 +840,7 @@ void startSetup() {
       web.on(probe, HTTP_GET, handleRoot);
     }
     web.onNotFound(handleRedirect);
+    WiFi.onEvent(onApEvent);
     routes = true;
   }
   WiFi.setAutoReconnect(false);   // попытки подключения переключают канал и мешают точке доступа
