@@ -18,9 +18,10 @@ MIN_HOURS = 6           # меньше — нет скорости за 6 ч, п
 DEFAULT_RATE = 0.5      # п. п./ч, если не из чего оценить
 
 
-def device_frame(db: Database, device: str, now: float) -> pd.DataFrame | None:
+def device_frame(db: Database, device: str, now: float,
+                 days: float = HISTORY_DAYS) -> pd.DataFrame | None:
     """Ряд устройства на 15-минутной сетке; soil — проценты устройства (уже откалиброваны)."""
-    rows = store.measurements_since(db, device, now - HISTORY_DAYS * 86400)
+    rows = store.measurements_since(db, device, now - days * 86400)
     rows = [r for r in rows if r["soil_ok"] and r["soil_pct"] is not None]
     if len(rows) < 2:
         return None
@@ -31,7 +32,7 @@ def device_frame(db: Database, device: str, now: float) -> pd.DataFrame | None:
     df = to_grid(raw, pd.Timedelta("15min"))
     with db.conn() as c:
         water = c.execute("SELECT ts FROM events WHERE device = ? AND type = 'water' AND ts >= ?",
-                          (device, now - HISTORY_DAYS * 86400)).fetchall()
+                          (device, now - days * 86400)).fetchall()
     for (ts,) in water:
         t = pd.Timestamp(ts, unit="s", tz="UTC").floor("15min")
         df.loc[df["ts"] == t, "watering_event"] = True

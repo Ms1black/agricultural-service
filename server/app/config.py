@@ -26,6 +26,8 @@ class Settings:
     # Загрузить модели голоса при старте (иначе — при первой фразе, это 10–60 с)
     voice_preload: bool = False
     whisper_model: str = "small"
+    # Переобучение прогноза раз в N часов внутри сервиса (M2); 0 — выключено
+    retrain_hours: float = 0
     tts_speaker: str = "aidar"
     # LLM (задача L1): gigachat | openai | none. Без ключа LLM выключена.
     llm_provider: str = "gigachat"
@@ -52,6 +54,7 @@ class Settings:
                                                                                   "yes", "on"),
             voice_preload=_flag("VOICE_PRELOAD"),
             whisper_model=os.environ.get("WHISPER_MODEL", cls.whisper_model),
+            retrain_hours=float(os.environ.get("ML_RETRAIN_HOURS", "24")),
             tts_speaker=os.environ.get("TTS_SPEAKER", cls.tts_speaker),
             llm_provider=os.environ.get("LLM_PROVIDER", cls.llm_provider).strip().lower(),
             llm_timeout_s=float(os.environ.get("LLM_TIMEOUT_S", cls.llm_timeout_s)),

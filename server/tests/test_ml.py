@@ -232,3 +232,52 @@ def test_policy_simulation_threshold_vs_ml():
     assert ml["in_range_share"] > 0.9 and ml["hours_wet"] == 0
     total = policy_sim.compare([df], None)["total"]
     assert total["ml"]["waterings"] == ml["waterings"]
+
+
+# ----- MLOps (M2) -----
+
+def test_forecast_monitoring_resolves_actual_error(app, device):
+    from app.ml import monitor
+    db = app.state.db
+    add_device_history(device, hours=12, rate=1.0, start_soil=70)   # сейчас 59 %, 1 %/ч
+    assert monitor.log_forecast(db, "plant1")
+    assert not monitor.log_forecast(db, "plant1")                   # не чаще раза в час
+    with db.conn() as c:
+        c.execute("UPDATE forecast_log SET ts = ts - 7200")
+        c.execute("INSERT INTO measurements (ts, device, soil_pct, soil_ok) "
+                  "VALUES (?, 'plant1', 29, 1)", (time.time(),))
+    assert monitor.resolve(db, "plant1") == 1
+    err = monitor.actual_error(db)
+    assert err["checked"] == 1 and err["ttt_mae_h"] is not None
+
+
+def test_own_data_joins_training_after_three_cycles(app):
+    from app.ml.train import with_own_data
+    db = app.state.db
+    df = sawtooth(rate=2.0, days=8)                      # 25 ч на цикл → 7 циклов
+    with db.conn() as c:
+        for ts, pct in zip(df["ts"], df["soil_pct"], strict=False):
+            c.execute("INSERT INTO measurements (ts, device, temp, air_hum, soil_raw, soil_pct, "
+                      "soil_ok, soil_dry_d0) VALUES (?, 'plant1', 22, 50, 2000, ?, 1, 0)",
+                      (ts.timestamp(), int(pct)))
+        prev = None
+        for ts, pct in zip(df["ts"], df["soil_pct"], strict=False):
+            if prev is not None and pct > prev + 20:
+                c.execute("INSERT INTO events (ts, device, type, value, note) "
+                          "VALUES (?, 'plant1', 'water', 3, 'auto')", (ts.timestamp(),))
+            prev = pct
+    base = synthetic_data()
+    now = df["ts"].iloc[-1].timestamp()
+    data, trained_on = with_own_data(db, base, {"sources": ["a", "b"], "series": [],
+                                                "own_cycles": 0}, now=now)
+    assert "device" in trained_on["sources"] and trained_on["own_cycles"] >= 3
+    assert (data["source"] == "device").sum() > 0
+
+
+def test_model_card_endpoint(app, web, tmp_path):
+    assert web.get("/web/api/model").json()["champion"] is None
+    train(app.state.db, str(tmp_path), synthetic_data(),
+          {"sources": ["a", "b"], "series": [], "own_cycles": 0})
+    card = web.get("/web/api/model").json()
+    assert card["champion"]["metrics"]["ttt_mae_h"] is not None
+    assert card["history"][0]["is_champion"] and card["monitoring"]["checked"] == 0

@@ -37,6 +37,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok", "schema": db.version(), "llm": llm,
                 "voice": app.state.stt is not None}
 
+    if settings.retrain_hours > 0:
+        from .ml.monitor import start_scheduler
+        start_scheduler(db, settings.models_path, settings.retrain_hours)
+
     app.include_router(api.router)
     app.include_router(web.router)
     return app

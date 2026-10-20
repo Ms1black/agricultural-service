@@ -62,6 +62,11 @@ def telemetry(t: Telemetry, request: Request) -> Response:
         decision.step(db, t.device)
     except Exception:  # без решения сервера устройство поливает по своему порогу
         logging.getLogger("decision").exception("ошибка модуля решений")
+    try:
+        from .ml import monitor
+        monitor.on_telemetry(db, t.device)
+    except Exception:
+        logging.getLogger("ml").exception("ошибка мониторинга прогноза")
 
     resp: dict = {"command": "none"}
     cmd = store.take_command(db, t.device, settings.command_ttl_s)

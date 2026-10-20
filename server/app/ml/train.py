@@ -1,6 +1,7 @@
 """Обучение прогноза высыхания (M1): оценка против бейзлайнов → регистрация → отчёт."""
 
 import json
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -41,6 +42,56 @@ def open_data(root: Path | None = None) -> tuple[pd.DataFrame, dict]:
                   "own_cycles": 0, "_series": frames}
 
 
+OWN_MIN_CYCLES = 3
+RECENT_DAYS = 7
+
+
+def with_own_data(db: Database, data: pd.DataFrame, trained_on: dict,
+                  now: float | None = None) -> tuple[pd.DataFrame, dict]:
+    """Добавить данные своих устройств, если у устройства ≥ 3 полных циклов (M2)."""
+    from .. import store
+    from .forecast import device_frame
+    now = now or time.time()
+    parts = [data]
+    for device in store.devices(db):
+        df = device_frame(db, device, now, days=365)
+        if df is None:
+            continue
+        cal = store.get_calibration(db, device) or {}
+        own = fm.samples(df, cal.get("target_low") or fm.DEFAULT_THRESHOLD)
+        cycles = int(fm.ttt_rows(own)["cycle"].nunique())
+        if cycles < OWN_MIN_CYCLES:
+            continue
+        own["source"], own["series"] = "device", f"device/{device}"
+        parts.append(own)
+        trained_on = {**trained_on, "own_cycles": trained_on.get("own_cycles", 0) + cycles,
+                      "sources": sorted({*trained_on["sources"], "device"}),
+                      "series": [*trained_on["series"], {
+                          "source": "device", "series": f"device/{device}", "cycles": cycles,
+                          "from": f"{df['ts'].iloc[0]:%Y-%m-%d}",
+                          "to": f"{df['ts'].iloc[-1]:%Y-%m-%d}"}]}
+    return pd.concat(parts, ignore_index=True), trained_on
+
+
+def _pick(r: dict) -> dict:
+    return {"ttt_mae_h": r.get("model_ttt_mae_h"), "mae_6h": r.get("model_mae_6h")}
+
+
+def recent_comparison(db: Database, data: pd.DataFrame, kind: str) -> tuple[dict, dict] | None:
+    """6.6: новая модель (без последних 7 дней своих данных) и текущая рабочая — на них."""
+    own = data[data["source"] == "device"]
+    champ = registry.champion(db, registry.TASK_DRYING)
+    if own.empty or champ is None:
+        return None
+    cut = own["ts"].max() - pd.Timedelta(days=RECENT_DAYS)
+    recent = own[own["ts"] > cut]
+    if recent.empty:
+        return None
+    challenger = fm.ForecastModel(kind).fit(data.drop(recent.index))
+    return (_pick(ev.score(challenger, recent)),
+            _pick(ev.score(registry.load(champ), recent)))
+
+
 def train(db: Database, models_dir: str, data: pd.DataFrame, trained_on: dict,
           report_path: Path | None = None) -> dict:
     results = {kind: ev.time_split(data, kind) for kind in ("gbr", "ridge")}
@@ -76,7 +127,11 @@ def train(db: Database, models_dir: str, data: pd.DataFrame, trained_on: dict,
         "time_split": results, "leave_one_source_out": loso, "adaptation": curve,
         "policy_sim": policy,
     }
-    entry = registry.save(db, models_dir, registry.TASK_DRYING, final, metrics, trained_on)
+    recent = recent_comparison(db, data, kind)
+    if recent:
+        metrics["recent_7d"] = {"challenger": recent[0], "champion": recent[1]}
+    entry = registry.save(db, models_dir, registry.TASK_DRYING, final, metrics, trained_on,
+                          recent=recent)
     if report_path:
         write_report(report_path, entry, metrics, trained_on)
     return {**entry, "metrics": metrics}

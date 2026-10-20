@@ -13,9 +13,10 @@ TASK_DRYING = "drying"
 
 
 def save(db: Database, models_dir: str, task: str, model, metrics: dict, trained_on: dict,
-         version: str | None = None) -> dict:
+         version: str | None = None, recent: tuple[dict, dict] | None = None) -> dict:
     """Сохранить модель; рабочей (champion) она становится, только если лучше бейзлайна
-    и лучше текущей рабочей (правило 6.6). Возвращает запись реестра."""
+    и лучше текущей рабочей (правило 6.6). recent — метрики (новая, текущая) на последних
+    7 днях своих данных: если есть, сравнение — по ним. Возвращает запись реестра."""
     version = version or time.strftime("%Y%m%d-%H%M%S")
     folder = Path(models_dir) / task / version
     folder.mkdir(parents=True, exist_ok=True)
@@ -26,7 +27,12 @@ def save(db: Database, models_dir: str, task: str, model, metrics: dict, trained
 
     current = champion(db, task)
     better_than_baseline = bool(metrics.get("beats_baseline"))
-    promote = better_than_baseline and (current is None or beats(metrics, current["metrics"]))
+    if current is None:
+        promote = better_than_baseline
+    elif recent is not None:
+        promote = better_than_baseline and beats(*recent)
+    else:
+        promote = better_than_baseline and beats(metrics, current["metrics"])
     with db.conn() as c:
         if promote:
             c.execute("UPDATE models SET is_champion = 0 WHERE task = ?", (task,))
