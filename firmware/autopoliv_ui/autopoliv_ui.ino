@@ -107,7 +107,7 @@ public:
       cfg.offset_rotation = 0;
       cfg.readable  = false;
       cfg.invert    = false;       // если белое и чёрное поменялись местами — true
-      cfg.rgb_order = false;       // если красный и синий поменялись местами — true
+      cfg.rgb_order = true;        // у этой панели красный и синий переставлены (проверено: капли были красными)
       cfg.dlen_16bit = false;
       cfg.bus_shared = false;
       _panel.config(cfg);
