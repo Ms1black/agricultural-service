@@ -22,6 +22,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.db = db
     app.state.llm = make_provider(settings)
+    from . import safety
+    safety.demo_mode = settings.demo_mode
     app.state.stt = app.state.tts = None
     if settings.voice_enabled:
         from .voice.engines import Silero, Whisper
@@ -35,7 +37,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def health() -> dict:
         llm = app.state.llm.name if app.state.llm else "none"
         return {"status": "ok", "schema": db.version(), "llm": llm,
-                "voice": app.state.stt is not None}
+                "voice": app.state.stt is not None, "demo": settings.demo_mode}
 
     if settings.retrain_hours > 0:
         from .ml.monitor import start_scheduler

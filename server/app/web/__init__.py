@@ -83,6 +83,7 @@ def state(request: Request, device: str = "plant1") -> dict:
     settings = request.app.state.settings
     return {
         "now": time.time(),
+        "demo": settings.demo_mode,
         "latest": store.latest_measurement(db, device),
         "calibration": store.get_calibration(db, device),
         "pending": store.pending_command(db, device, settings.command_ttl_s),

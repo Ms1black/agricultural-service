@@ -23,6 +23,12 @@ jobs:
       # secrets.h нет в репозитории — прошивка собирается с пустыми настройками (режим настройки)
       - run: pio run
         working-directory: firmware
+      # Варианты вывода звука (V2) и прошивка без голоса тоже должны собираться
+      - run: |
+          for flags in "-DAUDIO_OUT=AUDIO_PDM" "-DAUDIO_OUT=AUDIO_I2S_MAX98357" "-DVOICE_ENABLED=0"; do
+            PLATFORMIO_BUILD_FLAGS="$flags" pio run || exit 1
+          done
+        working-directory: firmware
 
   server:
     runs-on: ubuntu-latest

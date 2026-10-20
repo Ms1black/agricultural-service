@@ -11,6 +11,10 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <DNSServer.h>
+#include <ArduinoJson.h>
+#include <freertos/stream_buffer.h>
+#include "audio_out.h"   // голос (V2): настройки и вывод звука
+#include <time.h>
 #include <utility>
 
 // ===== Wi-Fi и сервер =====
@@ -25,6 +29,7 @@ const char* SERVER     = "";
 const char* API_TOKEN  = "";
 #endif
 const char* DEVICE_ID  = "plant1";
+const char* FW_VERSION = "1.1.0";
 
 // ===== Режим настройки =====
 // Нет сети / не подключился за 10 с / 3 хлопка → точка доступа, форма на http://192.168.4.1
@@ -123,9 +128,35 @@ SemaphoreHandle_t adcMutex;
 volatile int clapCount = 0;
 volatile unsigned long lastClap = 0;
 volatile int micPeak = 0;
+volatile bool voiceBusy = false;   // идёт голосовой диалог: хлопки и замер почвы на паузе
 
 unsigned long lastWater = 0;
 bool everWatered = false;
+time_t lastWaterEpoch = 0;          // время последнего полива по часам (NTP), хранится в Preferences
+
+// ===== Ответ сервера (F2: ArduinoJson) =====
+int nextWaterH = -1;                // прогноз: через сколько часов полив (-1 — нет прогноза)
+unsigned long nextWaterAt = 0;      // когда получен прогноз
+int calibStage = 0;                 // 1–3 — идёт калибровка
+bool demoMode = false;              // D1: сервер в демо-режиме — метка DEMO в шапке
+const unsigned long NEXT_FRESH_MS = 600000;   // прогноз старше 10 мин (нет связи) не показываем
+
+// ===== Голосовой помощник: состояние для полосы внизу экрана (F3, V2) =====
+enum VoiceState { VS_IDLE, VS_LISTEN, VS_THINK, VS_SPEAK };
+volatile VoiceState voiceState = VS_IDLE;
+
+// ===== Офлайн-буфер телеметрии (F2) =====
+// Сервер недоступен — замеры копятся в RAM и досылаются с полем age_s
+struct Sample {
+  unsigned long ms;
+  float temp, hum;
+  int raw, pct;
+  bool dry;
+};
+const int BUF_N = 240;              // 240 × 30 с = 2 часа
+Sample sampleBuf[BUF_N];
+int bufHead = 0, bufCount = 0;
+const int FLUSH_PER_SEND = 10;      // за раз досылаем не больше 10, чтобы не тормозить экран
 
 float curTemp = NAN, curHum = NAN;
 int   curSoil = -1;
@@ -184,6 +215,11 @@ void micTask(void *) {
     if (lvl > micPeak) micPeak = lvl;
     unsigned long now = millis();
 
+    if (voiceBusy) {                  // во время записи/ответа хлопки не считаем
+      loud = false;
+      vTaskDelay(10);
+      continue;
+    }
     if (!loud && lvl > CLAP_THRESHOLD) {
       loud = true;
       loudStart = now;
@@ -331,7 +367,14 @@ void drawHeader(const char* title) {
     canvas.setTextColor(C_INK);
     canvas.drawString("Setup: " + WiFi.softAPIP().toString(), 6, 3);
   } else {
-    drawSparkline(6, 3, 126, 15);      // вместо названия — график звука
+    drawSparkline(6, 3, demoMode ? 92 : 126, 15);   // вместо названия — график звука
+  }
+  if (demoMode) {                      // D1: демо-режим помечен на экране
+    canvas.fillRoundRect(102, 4, 34, 14, 3, C_INK);
+    canvas.setFont(&fonts::Font0);
+    canvas.setTextDatum(textdatum_t::middle_center);
+    canvas.setTextColor(C_BG);
+    canvas.drawString("DEMO", 119, 11);
   }
   drawWifiIcon(148, 15, wifiOk && serverOk);
   canvas.fillRect(6, 21, 148, 2, C_INK);
@@ -369,9 +412,15 @@ void drawCell(int x, int y, int w, int h, const char* label, bool degree, const 
   canvas.drawString(value, x + 5, y + h - 4);
 }
 
+bool clockOk() { return time(nullptr) > 1700000000; }
+
+String nextText(int hours);
+
 String agoText() {
-  if (!everWatered) return "--";
-  unsigned long m = (millis() - lastWater) / 60000;
+  unsigned long m;
+  if (everWatered) m = (millis() - lastWater) / 60000;
+  else if (lastWaterEpoch > 0 && clockOk()) m = (time(nullptr) - lastWaterEpoch) / 60;
+  else return "--";
   if (m < 1) return "now";
   if (m < 60) return String(m) + "m";
   if (m < 48 * 60) return String(m / 60) + "h";
@@ -399,17 +448,41 @@ void drawMainScreen() {
   drawCell(0, top + h + 1, w, h, "Air RH, %", false, "",
            isnan(curHum) ? String("--") : String((int)round(curHum)), false);
 
-  // Последний полив
-  drawCell(w, top + h + 1, w, h, "Watered", false, "", agoText(), false);
+  // Следующий полив по прогнозу сервера; без связи — время с последнего полива, как раньше
+  if (nextWaterH >= 0 && serverOk && millis() - nextWaterAt < NEXT_FRESH_MS) {
+    drawCell(w, top + h + 1, w, h, "Next", false, "", nextText(nextWaterH), false);
+  } else {
+    drawCell(w, top + h + 1, w, h, "Watered", false, "", agoText(), false);
+  }
 }
 
-void drawToast() {
-  if (millis() > toastUntil || toastText.length() == 0) return;
+String nextText(int hours) {
+  if (hours <= 0) return "now";
+  if (hours < 48) return String(hours) + "h";
+  return String(hours / 24) + "d";
+}
+
+void drawBar(const String& text) {
   canvas.fillRect(0, 108, 160, 20, C_INK);
   canvas.setFont(&fonts::Font2);
   canvas.setTextDatum(textdatum_t::middle_center);
   canvas.setTextColor(C_BG);
-  canvas.drawString(toastText, 80, 118);
+  canvas.drawString(text, 80, 118);
+}
+
+// Полоса внизу: сообщение > голосовой помощник > калибровка
+void drawToast() {
+  if (millis() <= toastUntil && toastText.length() > 0) {
+    drawBar(toastText);
+  } else if (voiceState == VS_LISTEN) {
+    drawBar("Listening...");
+  } else if (voiceState == VS_THINK) {
+    drawBar("Thinking...");
+  } else if (voiceState == VS_SPEAK) {
+    drawBar("Speaking...");
+  } else if (calibStage >= 1 && calibStage <= 3) {
+    drawBar("Calibrating " + String(calibStage) + "/3");
+  }
 }
 
 void renderFrame() {
@@ -435,16 +508,6 @@ void renderWatering(const String& reason) {
 // ===== Связь с сервером =====
 String numOrNull(float v, int digits) {
   return isnan(v) ? String("null") : String(v, digits);
-}
-
-int jsonInt(const String& s, const char* key, int def) {
-  String k = String("\"") + key + "\":";
-  int i = s.indexOf(k);
-  if (i < 0) return def;
-  String rest = s.substring(i + k.length());
-  rest.trim();
-  if (rest.startsWith("null")) return def;
-  return rest.toInt();
 }
 
 bool postJson(const char* path, const String& body, String* response) {
@@ -478,28 +541,44 @@ void water(String reason, unsigned long ms = WATER_MS) {
   digitalWrite(PIN_RELAY, RELAY_OFF);
   lastWater = millis();
   everWatered = true;
+  if (clockOk()) {                     // время полива переживает перезагрузку
+    lastWaterEpoch = time(nullptr);
+    prefs.begin("state", false);
+    prefs.putLong64("water_ts", lastWaterEpoch);
+    prefs.end();
+  }
   clapCount = 0;
   toast("Watering done");
   sendEvent("water", ms / 1000.0, reason);
 }
 
+void handleResponse(const String& resp);
+String telemetryJson(float temp, float hum, int raw, int pct, bool dry, long ageS);
+void bufferSample();
+void flushBuffer();
+
 void sendTelemetry() {
-  String body = "{";
-  body += "\"device\":\"" + String(DEVICE_ID) + "\",";
-  body += "\"temp\":" + numOrNull(curTemp, 2) + ",";
-  body += "\"air_hum\":" + numOrNull(curHum, 2) + ",";
-  body += "\"soil_raw\":" + String(soilRaw) + ",";
-  body += "\"soil_pct\":" + String(curSoil) + ",";
-  body += "\"soil_ok\":" + String(curSoil >= 0 ? "true" : "false") + ",";
-  body += "\"soil_dry\":" + String(soilDry ? "true" : "false");
-  body += "}";
+  String body = telemetryJson(curTemp, curHum, soilRaw, curSoil, soilDry, 0);
 
   String resp;
   serverOk = postJson("/api/telemetry", body, &resp);
-  if (!serverOk) return;
+  if (!serverOk) {
+    bufferSample();
+    return;
+  }
+  handleResponse(resp);
+  flushBuffer();
+}
 
-  int dry = jsonInt(resp, "dry", soilDryCal);
-  int wet = jsonInt(resp, "wet", soilWetCal);
+// Ответ на телеметрию (контракт 4.1): {"command":"water","seconds":3,"dry":3900,"wet":1300,…}
+void handleResponse(const String& resp) {
+  JsonDocument doc;
+  if (deserializeJson(doc, resp)) {
+    Serial.println("Сервер: не удалось разобрать ответ");
+    return;
+  }
+  int dry = doc["dry"] | soilDryCal;
+  int wet = doc["wet"] | soilWetCal;
   if (dry != wet && (dry != soilDryCal || wet != soilWetCal)) {
     soilDryCal = dry;
     soilWetCal = wet;
@@ -507,14 +586,54 @@ void sendTelemetry() {
     toast("Calibration updated");
   }
 
-  bool ml = resp.indexOf("\"mode\":\"ml\"") >= 0;
+  bool ml = doc["mode"] == "ml";
   if (ml != serverMl) Serial.printf("Режим полива: %s\n", ml ? "ml (решает сервер)" : "порог");
   serverMl = ml;
   if (ml) serverMlAt = millis();
 
-  if (resp.indexOf("\"command\":\"water\"") >= 0) {
-    int sec = constrain(jsonInt(resp, "seconds", 3), 1, 10);
+  calibStage = doc["calib_stage"] | 0;
+  demoMode = doc["demo"] | false;
+  nextWaterH = doc["next_water_h"] | -1;
+  nextWaterAt = millis();
+
+  if (doc["command"] == "water") {
+    int sec = constrain(doc["seconds"] | 3, 1, 10);
     water("web", sec * 1000UL);
+  }
+}
+
+String telemetryJson(float temp, float hum, int raw, int pct, bool dry, long ageS) {
+  String body = "{";
+  body += "\"device\":\"" + String(DEVICE_ID) + "\",";
+  body += "\"temp\":" + numOrNull(temp, 2) + ",";
+  body += "\"air_hum\":" + numOrNull(hum, 2) + ",";
+  body += "\"soil_raw\":" + String(raw) + ",";
+  body += "\"soil_pct\":" + String(pct) + ",";
+  body += "\"soil_ok\":" + String(pct >= 0 ? "true" : "false") + ",";
+  body += "\"soil_dry\":" + String(dry ? "true" : "false") + ",";
+  if (ageS > 0) body += "\"age_s\":" + String(ageS) + ",";
+  body += "\"uptime_s\":" + String(millis() / 1000) + ",";
+  body += "\"fw_version\":\"" + String(FW_VERSION) + "\"";
+  body += "}";
+  return body;
+}
+
+void bufferSample() {
+  sampleBuf[bufHead] = {millis(), curTemp, curHum, soilRaw, curSoil, soilDry};
+  bufHead = (bufHead + 1) % BUF_N;
+  if (bufCount < BUF_N) bufCount++;    // переполнение — затираем самые старые
+}
+
+// Досылка накопленного: от старых к новым; ответы на старые замеры не исполняем —
+// по устаревшим данным сервер решений не принимает
+void flushBuffer() {
+  for (int k = 0; k < FLUSH_PER_SEND && bufCount > 0; k++) {
+    int i = (bufHead - bufCount + BUF_N) % BUF_N;
+    const Sample& s = sampleBuf[i];
+    long age = (millis() - s.ms) / 1000;
+    if (!postJson("/api/telemetry", telemetryJson(s.temp, s.hum, s.raw, s.pct, s.dry, age),
+                  nullptr)) return;
+    bufCount--;
   }
 }
 
@@ -532,6 +651,7 @@ void updateSensors() {
     curHum = he.relative_humidity;
   }
 
+  if (voiceBusy) return;               // АЦП занят записью фразы — замер в следующий раз
   curSoil = readSoilPercent();
   soilDry = digitalRead(PIN_SOIL_D) == HIGH;   // если D0 показывает наоборот — поменяйте на LOW
 
@@ -713,6 +833,7 @@ void connectWiFi() {
     Serial.print("Wi-Fi подключён, IP: ");
     Serial.println(WiFi.localIP());
     toast("WiFi " + WiFi.localIP().toString());
+    configTime(0, 0, "pool.ntp.org", "time.google.com");   // часы — для времени полива
   } else {
     Serial.println("Wi-Fi не подключился, включаю режим настройки");
     startSetup();
@@ -731,9 +852,167 @@ void handleSetup() {
   }
 }
 
+// ===== Голос (V2): запись → сервер → ответ =====
+// Запись идёт в loop (ядро 1) под adcMutex; отправка — в отдельной задаче на ядре 0 (там Wi-Fi):
+// данные идут через StreamBuffer, вся фраза в RAM не хранится.
+StreamBufferHandle_t voiceStream = nullptr;
+volatile bool voiceRecording = false;
+volatile int voiceResult = 0;          // 0 — идёт, 1 — успех, -1 — ошибка
+TaskHandle_t voiceTaskHandle = nullptr;
+
+bool splitServer(String& host, uint16_t& port) {
+  String u = cfgServer;
+  if (!u.startsWith("http://")) return false;     // HTTPS устройство не использует (раздел 4.4)
+  u = u.substring(7);
+  int slash = u.indexOf('/');
+  if (slash >= 0) u = u.substring(0, slash);
+  int colon = u.indexOf(':');
+  host = colon >= 0 ? u.substring(0, colon) : u;
+  port = colon >= 0 ? u.substring(colon + 1).toInt() : 80;
+  return host.length() > 0 && port > 0;
+}
+
+// Задача на ядре 0: POST /api/voice (chunked) → читаем ответ и выводим звук
+void voiceTask(void*) {
+  String host;
+  uint16_t port;
+  WiFiClient client;
+  int result = -1;
+  if (splitServer(host, port) && client.connect(host.c_str(), port, 3000)) {
+    client.setTimeout(VOICE_TIMEOUT_MS / 1000);
+    client.print("POST /api/voice HTTP/1.1\r\nHost: " + host + "\r\n"
+                 "Content-Type: audio/L16; rate=16000; channels=1\r\n"
+                 "X-Device: " + String(DEVICE_ID) + "\r\n" +
+                 (cfgToken.length() ? "X-Api-Key: " + cfgToken + "\r\n" : String("")) +
+                 "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
+    uint8_t buf[2048];
+    bool ok = true;
+    for (;;) {
+      size_t n = xStreamBufferReceive(voiceStream, buf, sizeof(buf), pdMS_TO_TICKS(50));
+      if (n > 0) {
+        client.printf("%X\r\n", (unsigned)n);
+        if (client.write(buf, n) != n) { ok = false; break; }
+        client.print("\r\n");
+      } else if (!voiceRecording && xStreamBufferIsEmpty(voiceStream)) {
+        break;
+      }
+    }
+    if (ok) {
+      client.print("0\r\n\r\n");
+      voiceState = VS_THINK;
+      String status = client.readStringUntil('\n');
+      long length = -1;
+      for (;;) {                                   // заголовки ответа
+        String line = client.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) break;
+        if (line.startsWith("Content-Length:") || line.startsWith("content-length:")) {
+          length = line.substring(15).toInt();
+        }
+      }
+      if (status.indexOf(" 200") > 0) {
+        voiceState = VS_SPEAK;
+        AudioOut* out = makeAudioOut();
+        bool play = out->begin();
+        unsigned long t0 = millis();
+        long got = 0;
+        int16_t pcm[512];
+        while ((length < 0 || got < length) && (client.connected() || client.available())) {
+          int n = client.read((uint8_t*)pcm, sizeof(pcm));
+          if (n <= 0) { vTaskDelay(1); continue; }
+          if (play) out->write(pcm, n / 2);
+          got += n;
+        }
+        // Звук играет в браузере — держим «Speaking...», пока длится ответ
+        unsigned long durMs = got * 1000UL / (VOICE_RATE * 2);
+        while (AUDIO_OUT == AUDIO_NONE && millis() - t0 < durMs) vTaskDelay(50);
+        out->end();
+        delete out;
+        result = 1;
+      } else {
+        Serial.printf("Голос: сервер ответил %s\n", status.c_str());
+      }
+    }
+  } else {
+    Serial.println("Голос: нет связи с сервером");
+  }
+  client.stop();
+  voiceResult = result;
+  voiceTaskHandle = nullptr;
+  vTaskDelete(nullptr);
+}
+
+// Запись фразы с MAX9814: 16 кГц, DC убираем, конец — по тишине
+void recordPhrase() {
+  const unsigned long periodUs = 1000000UL / VOICE_RATE;
+  const int BLOCK = VOICE_RATE / 10;               // 100 мс — блок для уровня громкости
+  int16_t block[160];
+  int fill = 0, bmin = 4095, bmax = 0, inBlock = 0;
+  float dc = 2048;
+  bool spoke = false;
+  long samples = 0;
+  unsigned long start = millis(), lastLoud = millis();
+  xSemaphoreTake(adcMutex, portMAX_DELAY);
+  unsigned long next = micros();
+  while (millis() - start < PHRASE_MAX_MS) {
+    while ((long)(micros() - next) < 0) {}
+    next += periodUs;
+    int v = analogRead(PIN_MIC);
+    samples++;
+    dc += (v - dc) * 0.001f;
+    block[fill++] = constrain((int)((v - dc) * 16), -32767, 32767);
+    if (fill == 160) {                             // 10 мс — отдаём на отправку
+      xStreamBufferSend(voiceStream, block, sizeof(block), 0);
+      fill = 0;
+    }
+    if (v < bmin) bmin = v;
+    if (v > bmax) bmax = v;
+    if (++inBlock >= BLOCK) {
+      if (bmax - bmin > SPEECH_LEVEL) { spoke = true; lastLoud = millis(); }
+      bmin = 4095; bmax = 0; inBlock = 0;
+      if (spoke && millis() - lastLoud > SILENCE_END_MS) break;
+      if (!spoke && millis() - start > NO_SPEECH_MS) break;
+    }
+  }
+  xSemaphoreGive(adcMutex);
+  if (fill) xStreamBufferSend(voiceStream, block, fill * 2, 0);
+  // Для ручной проверки: частота должна быть ≈ 16000 (иначе analogRead не успевает)
+  unsigned long ms = millis() - start;
+  Serial.printf("Голос: записано %.1f с, частота %ld Гц, речь: %s\n", ms / 1000.0,
+                ms ? samples * 1000L / (long)ms : 0, spoke ? "да" : "нет");
+}
+
+void voiceDialog() {
+  if (!wifiOk || !serverOk || cfgServer.length() == 0) {
+    toast("No server for voice");
+    return;
+  }
+  if (!voiceStream) voiceStream = xStreamBufferCreate(32768, 1);   // ≈ 1 с запаса
+  xStreamBufferReset(voiceStream);
+  voiceBusy = true;
+  voiceResult = 0;
+  voiceRecording = true;
+  voiceState = VS_LISTEN;
+  renderFrame();
+  xTaskCreatePinnedToCore(voiceTask, "voice", 8192, nullptr, 1, &voiceTaskHandle, 0);
+  recordPhrase();
+  voiceRecording = false;
+  voiceState = VS_THINK;
+  unsigned long t0 = millis();
+  while (voiceResult == 0 && millis() - t0 < VOICE_TIMEOUT_MS + 5000) {
+    renderFrame();                                 // экран живёт: Thinking... / Speaking...
+    delay(100);
+  }
+  if (voiceResult != 1) toast("Voice error");
+  voiceState = VS_IDLE;
+  voiceBusy = false;
+}
+
 // ===== Команды хлопками =====
 void runCommand(int claps) {
-  if (claps == 1) {
+  if (claps == 1 && VOICE_ENABLED && !setupMode) {
+    voiceDialog();                            // 1 хлопок — «слушаю» (V2)
+  } else if (claps == 1) {
     toast("Hello! I am listening");          // 1 хлопок — приветствие
   } else if (claps == 2) {
     water("claps");                           // 2 хлопка — полив
@@ -777,6 +1056,9 @@ void setup() {
   if (!ahtOk) Serial.println("AHT20 не найден");
 
   loadConfig();
+  prefs.begin("state", true);
+  lastWaterEpoch = prefs.getLong64("water_ts", 0);
+  prefs.end();
   connectWiFi();
 
   xTaskCreatePinnedToCore(micTask, "mic", 4096, NULL, 1, NULL, 0);

@@ -91,6 +91,21 @@ def forecast(db: Database, device: str, threshold: float = fm.DEFAULT_THRESHOLD,
             "adaptation": {"own_cycles": own_cycles, "scale": round(scale, 3)}, "note": note}
 
 
+_cache: dict[tuple, tuple[float, dict]] = {}
+CACHE_S = 300
+
+
+def cached_forecast(db: Database, device: str, threshold: float = fm.DEFAULT_THRESHOLD) -> dict:
+    """Прогноз не чаще раза в 5 мин на устройство: телеметрия приходит каждые 30 с."""
+    key = (db.path, device, threshold)
+    hit = _cache.get(key)
+    if hit and time.time() - hit[0] < CACHE_S:
+        return hit[1]
+    fc = forecast(db, device, threshold)
+    _cache[key] = (time.time(), fc)
+    return fc
+
+
 def consistent_hours(trajectory: list[dict], threshold: float, hours: float) -> float:
     """Время до порога, согласованное с траекторией: пересекает порог в 24 ч — берём точку
     пересечения, иначе — прогноз времени до порога, но не меньше горизонта траектории."""
