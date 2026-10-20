@@ -1108,15 +1108,10 @@ void checkWake() {
   voiceDialog(true);
 }
 
-// ===== Команды хлопками =====
+// ===== Команды хлопками: только режим настройки =====
+// Голосовой помощник — по слову «Джарвис» (V3), полив — по порогу или прогнозу ИИ (D0).
 void runCommand(int claps) {
-  if (claps == 1 && VOICE_ENABLED && !setupMode) {
-    voiceDialog();                            // 1 хлопок — «слушаю» (V2)
-  } else if (claps == 1) {
-    toast("Hello! I am listening");          // 1 хлопок — приветствие
-  } else if (claps == 2) {
-    water("claps");                           // 2 хлопка — полив
-  } else if (claps == 3) {                    // 3 хлопка — режим настройки (повторно — выход)
+  if (claps == 3) {                           // 3 хлопка — режим настройки (повторно — выход)
     if (setupMode) {
       stopSetup();
       connectWiFi();
@@ -1124,7 +1119,7 @@ void runCommand(int claps) {
       startSetup();
     }
   } else {
-    toast("Unknown: " + String(claps) + " claps");
+    Serial.printf("Хлопков: %d — команды нет (3 хлопка — режим настройки)\n", claps);
   }
 }
 
