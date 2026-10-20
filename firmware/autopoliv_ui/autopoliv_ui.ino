@@ -729,20 +729,30 @@ String htmlEscape(const String& s) {
 // Сканирование асинхронное: забираем готовый результат; новое — только по запросу.
 // Во время сканирования точка доступа переключает канал и на миг пропадает: iPhone
 // открывает страницу несколькими запросами и на этом обрывается — поэтому не на каждый запрос.
+// Точка доступа работает одна (без режима клиента): иначе радио уходит на другие каналы,
+// очередь отправки переполняется (WiFiUdp «could not send data: 12») и iPhone не открывает
+// страницу. Режим клиента включаем только на время поиска сетей.
+void collectScan(int n) {
+  scanItems = "";
+  for (int i = 0; i < n; i++) {
+    String s = htmlEscape(WiFi.SSID(i));
+    if (s.length() == 0 || scanItems.indexOf("<b>" + s + "</b>") >= 0) continue;
+    scanItems += "<li onclick=\"f.ssid.value=this.firstChild.textContent\"><b>" + s +
+                 "</b> " + String(WiFi.RSSI(i)) + " дБм</li>";
+  }
+  WiFi.scanDelete();
+}
+
 void refreshScan(bool start) {
   int n = WiFi.scanComplete();
   if (n == WIFI_SCAN_RUNNING) return;
-  if (n >= 0) {
-    scanItems = "";
-    for (int i = 0; i < n; i++) {
-      String s = htmlEscape(WiFi.SSID(i));
-      if (s.length() == 0 || scanItems.indexOf("<b>" + s + "</b>") >= 0) continue;
-      scanItems += "<li onclick=\"f.ssid.value=this.firstChild.textContent\"><b>" + s +
-                   "</b> " + String(WiFi.RSSI(i)) + " дБм</li>";
-    }
-    WiFi.scanDelete();
+  if (n >= 0) collectScan(n);
+  if (start) {
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.scanNetworks(true);
+  } else if (WiFi.getMode() == WIFI_AP_STA) {
+    WiFi.mode(WIFI_AP);             // поиск закончен — снова только точка доступа
   }
-  if (start) WiFi.scanNetworks(true);
 }
 
 const char PAGE_HEAD[] PROGMEM = R"html(<!doctype html><html lang="ru"><head><meta charset="utf-8">
@@ -845,11 +855,14 @@ void startSetup() {
   }
   WiFi.setAutoReconnect(false);   // попытки подключения переключают канал и мешают точке доступа
   WiFi.disconnect();
-  WiFi.mode(WIFI_AP_STA);         // STA нужен для сканирования сетей
+  WiFi.mode(WIFI_STA);            // сети ищем один раз — до запуска точки доступа
+  int n = WiFi.scanNetworks(false);
+  if (n >= 0) collectScan(n);
+  WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);           // радио не засыпает — пакеты телефону уходят сразу
   WiFi.softAP(AP_SSID, AP_PASS);
   dns.start(53, "*", WiFi.softAPIP());
   web.begin();
-  WiFi.scanNetworks(true);
 
   setupMode = true;
   setupSince = millis();
@@ -863,6 +876,7 @@ void stopSetup() {
   web.stop();
   dns.stop();
   WiFi.softAPdisconnect(true);
+  WiFi.setSleep(true);            // как в обычном режиме
   setupMode = false;
 }
 
@@ -896,6 +910,10 @@ void handleSetup() {
   if (!setupMode) return;
   dns.processNextRequest();
   web.handleClient();
+  // Поиск по кнопке закончился — вернуть режим «только точка доступа»
+  if (WiFi.getMode() == WIFI_AP_STA && WiFi.scanComplete() != WIFI_SCAN_RUNNING) {
+    refreshScan(false);
+  }
   // Роутер мог просто загружаться дольше устройства — периодически пробуем снова
   if (WiFi.softAPgetStationNum() > 0) setupSince = millis();
   if (cfgSsid.length() > 0 && millis() - setupSince > SETUP_RETRY_MS) {
