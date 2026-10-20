@@ -216,3 +216,50 @@ def test_demo_mode_shortens_only_interval(app, device):
         assert not safety.check(db, "plant1", 3).ok                 # > 70 % — как всегда
     finally:
         safety.demo_mode = False
+
+
+
+# ----- V3: «Джарвис» без хлопка -----
+
+@pytest.mark.parametrize("text,rest", [
+    ("Джарвис, как там мой цветок?", "как там мой цветок?"),
+    ("Эй, Джарвис!", ""),
+    ("Hey Jarvis, полей", "полей"),
+    ("арвис, полей", "полей"),                       # Whisper потерял начало
+    ("Хеджервис, полей растение.", "полей растение."),  # Whisper склеил «Хэй Джарвис»
+    ("Хейджарвис", ""),
+    ("Как там мой цветок?", None),
+    ("Я вчера смотрел фильм про Джарвиса", None),    # не в начале — не обращение
+])
+def test_wake_word(text, rest):
+    from app.voice import wake_rest
+    assert wake_rest(text) == rest
+
+
+def test_wake_phrase_without_name_is_silent(voice_app, device, web):
+    r = say(voice_app, device, "Сегодня хорошая погода", path="/api/voice?wake=1")
+    assert r.status_code == 204 and r.content == b""
+    assert web.get("/web/api/voice/log").json()["items"] == []        # в журнал не пишем
+
+
+def test_wake_name_only_says_listening(voice_app, device):
+    r = say(voice_app, device, "Эй, Джарвис", path="/api/voice?wake=1")
+    assert r.status_code == 200 and r.headers["X-Listen"] == "1"
+    assert unquote(r.headers["X-Answer"]) == "Слушаю."
+
+
+def test_wake_with_question_answers_at_once(voice_app, device):
+    device.post("/api/telemetry", json=TELEMETRY)
+    r = say(voice_app, device, "Джарвис, как там мой цветок?", path="/api/voice?wake=1")
+    assert r.status_code == 200 and "X-Listen" not in r.headers
+    assert "Влажность почвы 50 %" in unquote(r.headers["X-Answer"])
+
+
+def test_wake_backs_off_after_many_misses(voice_app, device):
+    from app import voice
+    voice._misses.clear()
+    for _ in range(voice.WAKE_MAX_MISSES):
+        assert say(voice_app, device, "шум", path="/api/voice?wake=1").status_code == 204
+    r = say(voice_app, device, "шум", path="/api/voice?wake=1")
+    assert r.status_code == 429 and r.headers["Retry-After"] == "30"
+    voice._misses.clear()

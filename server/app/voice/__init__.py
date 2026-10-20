@@ -25,6 +25,16 @@ WATER = re.compile(r"\b(пол[еи]й|полить|поливай|полейт�
 STATUS = re.compile(r"(как\s+(?:там|дела|себя|поживает|он|она|оно|мой|моя|цвет)|что\s+с\s+"
                     r"|состояни|расскажи|влажн|сух|пора\s+поли|когда\s+поли)", re.I)
 
+# V3: обращение «Джарвис» в начале фразы (с «эй/хэй» или без; Whisper иногда теряет начало)
+WAKE_WORD = re.compile(r"^\W*(?:(?:эй|хэй|хей|хе|хай|hey|ай)\W*)?"
+                       r"(?:джарвис|джервис|jarvis|жарвис|дарвис|чарвис|\w{0,2}арвис)\b\W*", re.I)
+LISTEN_ANSWER = "Слушаю."
+# Подряд много фраз без обращения (телевизор, разговор) — устройство просим подождать
+WAKE_MAX_MISSES = 6
+WAKE_MISS_WINDOW_S = 120
+WAKE_RETRY_S = 30
+_misses: dict[str, list[float]] = {}
+
 SPEECH_HINT = ("Ответ будет произнесён вслух: 1–3 коротких предложения, без списков, "
                "без смайликов и без разметки.")
 
@@ -39,6 +49,24 @@ class VoiceResult:
     ms_stt: int
     ms_llm: int
     ms_tts: int
+    listen: bool = False      # прозвучало только «Джарвис» — устройство слушает вопрос
+
+
+def wake_rest(text: str) -> str | None:
+    """Текст после обращения «Джарвис» или None, если обращения в начале нет."""
+    m = WAKE_WORD.match(text)
+    return text[m.end():].strip() if m else None
+
+
+def wake_busy(device: str, now: float | None = None) -> bool:
+    now = now or time.time()
+    recent = [t for t in _misses.get(device, []) if now - t < WAKE_MISS_WINDOW_S]
+    _misses[device] = recent
+    return len(recent) >= WAKE_MAX_MISSES
+
+
+def wake_miss(device: str) -> None:
+    _misses.setdefault(device, []).append(time.time())
 
 
 def intent(text: str) -> str:
@@ -99,13 +127,29 @@ def answer_for(db: Database, llm, device: str, text: str, kind: str) -> str:
     return "Я умею рассказать о растении и полить его. Спросите: как там мой цветок?"
 
 
-def handle(db: Database, llm, stt, tts, voice_dir: str, device: str, audio) -> VoiceResult:
-    """audio — float32 16 кГц или файл, который декодирует STT."""
+def handle(db: Database, llm, stt, tts, voice_dir: str, device: str, audio,
+           wake: bool = False) -> VoiceResult | None:
+    """audio — float32 16 кГц или файл, который декодирует STT.
+
+    wake=True (V3, «Джарвис» без хлопка): фраза без обращения в начале — None, ничего не пишем;
+    только «Джарвис» — ответ «Слушаю.» и listen=True; иначе — обычный ответ на остаток фразы.
+    """
     t0 = time.monotonic()
     transcript = stt.transcribe(audio)
     t1 = time.monotonic()
-    kind = intent(transcript)
-    answer = answer_for(db, llm, device, transcript, kind)
+    listen = False
+    if wake:
+        rest = wake_rest(transcript)
+        if rest is None:
+            wake_miss(device)
+            return None
+        _misses.pop(device, None)
+        listen = not rest
+    if listen:
+        kind, answer = "wake", LISTEN_ANSWER
+    else:
+        kind = intent(transcript)
+        answer = answer_for(db, llm, device, transcript, kind)
     t2 = time.monotonic()
     speech = tts.synthesize(speech_text(answer)) if answer else np.zeros(0, np.float32)
     pcm = float_to_pcm16(speech[: MAX_ANSWER_S * RATE])
@@ -123,7 +167,7 @@ def handle(db: Database, llm, stt, tts, voice_dir: str, device: str, audio) -> V
     path.write_bytes(wav_bytes(pcm))
     with db.conn() as c:
         c.execute("UPDATE voice_log SET audio_path = ? WHERE id = ?", (str(path), vid))
-    return VoiceResult(vid, transcript, answer, kind, pcm, *ms)
+    return VoiceResult(vid, transcript, answer, kind, pcm, *ms, listen=listen)
 
 
 def log(db: Database, device: str | None = None, after: int = 0, limit: int = 30) -> list[dict]:

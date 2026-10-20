@@ -129,6 +129,8 @@ volatile int clapCount = 0;
 volatile unsigned long lastClap = 0;
 volatile int micPeak = 0;
 volatile bool voiceBusy = false;   // идёт голосовой диалог: хлопки и замер почвы на паузе
+volatile bool wakeTrigger = false; // V3: звучит речь — проверить, не «Джарвис» ли это
+unsigned long wakeBackoffUntil = 0;
 
 unsigned long lastWater = 0;
 bool everWatered = false;
@@ -210,6 +212,7 @@ int micLevel(int ms) {
 void micTask(void *) {
   bool loud = false;
   unsigned long loudStart = 0;
+  unsigned long speechStart = 0, speechLast = 0;   // V3: непрерывный звук — речь
   for (;;) {
     int lvl = micLevel(10);
     if (lvl > micPeak) micPeak = lvl;
@@ -217,8 +220,21 @@ void micTask(void *) {
 
     if (voiceBusy) {                  // во время записи/ответа хлопки не считаем
       loud = false;
+      speechStart = 0;
       vTaskDelay(10);
       continue;
+    }
+    if (WAKE_ENABLED && VOICE_ENABLED) {
+      if (lvl > WAKE_LEVEL) {
+        if (!speechStart || now - speechLast > WAKE_GAP_MS) speechStart = now;
+        speechLast = now;
+        // Хлопок короче 150 мс; серию хлопков не трогаем — её разбирает runCommand
+        if (now - speechStart >= WAKE_MIN_MS && now - lastClap > CLAP_WAIT && clapCount == 0) {
+          wakeTrigger = true;
+        }
+      } else if (now - speechLast > WAKE_GAP_MS) {
+        speechStart = 0;
+      }
     }
     if (!loud && lvl > CLAP_THRESHOLD) {
       loud = true;
@@ -858,6 +874,10 @@ void handleSetup() {
 StreamBufferHandle_t voiceStream = nullptr;
 volatile bool voiceRecording = false;
 volatile int voiceResult = 0;          // 0 — идёт, 1 — успех, -1 — ошибка
+// V3: 2 — фраза без «Джарвис» (204), 3 — сервер просит подождать (429)
+const int VOICE_NOT_FOR_US = 2, VOICE_BUSY = 3;
+volatile bool voiceWake = false;       // запись без хлопка: /api/voice?wake=1
+volatile bool voiceListen = false;     // сервер ответил «Слушаю» — ждём вопрос (X-Listen)
 TaskHandle_t voiceTaskHandle = nullptr;
 
 bool splitServer(String& host, uint16_t& port) {
@@ -880,7 +900,8 @@ void voiceTask(void*) {
   int result = -1;
   if (splitServer(host, port) && client.connect(host.c_str(), port, 3000)) {
     client.setTimeout(VOICE_TIMEOUT_MS / 1000);
-    client.print("POST /api/voice HTTP/1.1\r\nHost: " + host + "\r\n"
+    client.print(String("POST ") + (voiceWake ? "/api/voice?wake=1" : "/api/voice") +
+                 " HTTP/1.1\r\nHost: " + host + "\r\n"
                  "Content-Type: audio/L16; rate=16000; channels=1\r\n"
                  "X-Device: " + String(DEVICE_ID) + "\r\n" +
                  (cfgToken.length() ? "X-Api-Key: " + cfgToken + "\r\n" : String("")) +
@@ -899,7 +920,7 @@ void voiceTask(void*) {
     }
     if (ok) {
       client.print("0\r\n\r\n");
-      voiceState = VS_THINK;
+      if (!voiceWake) voiceState = VS_THINK;     // без хлопка: молчим, пока не ясно, нам ли
       String status = client.readStringUntil('\n');
       long length = -1;
       for (;;) {                                   // заголовки ответа
@@ -909,8 +930,13 @@ void voiceTask(void*) {
         if (line.startsWith("Content-Length:") || line.startsWith("content-length:")) {
           length = line.substring(15).toInt();
         }
+        if (line.startsWith("X-Listen:") || line.startsWith("x-listen:")) voiceListen = true;
       }
-      if (status.indexOf(" 200") > 0) {
+      if (status.indexOf(" 204") > 0) {
+        result = VOICE_NOT_FOR_US;
+      } else if (status.indexOf(" 429") > 0) {
+        result = VOICE_BUSY;
+      } else if (status.indexOf(" 200") > 0) {
         voiceState = VS_SPEAK;
         AudioOut* out = makeAudioOut();
         bool play = out->begin();
@@ -982,30 +1008,50 @@ void recordPhrase() {
                 ms ? samples * 1000L / (long)ms : 0, spoke ? "да" : "нет");
 }
 
-void voiceDialog() {
+void voiceDialog(bool wake = false) {
   if (!wifiOk || !serverOk || cfgServer.length() == 0) {
-    toast("No server for voice");
+    if (!wake) toast("No server for voice");
     return;
   }
   if (!voiceStream) voiceStream = xStreamBufferCreate(32768, 1);   // ≈ 1 с запаса
   xStreamBufferReset(voiceStream);
   voiceBusy = true;
   voiceResult = 0;
+  voiceWake = wake;
+  voiceListen = false;
   voiceRecording = true;
-  voiceState = VS_LISTEN;
+  voiceState = wake ? VS_IDLE : VS_LISTEN;   // без хлопка «Listening...» не показываем
   renderFrame();
   xTaskCreatePinnedToCore(voiceTask, "voice", 8192, nullptr, 1, &voiceTaskHandle, 0);
   recordPhrase();
   voiceRecording = false;
-  voiceState = VS_THINK;
+  if (!wake) voiceState = VS_THINK;
   unsigned long t0 = millis();
   while (voiceResult == 0 && millis() - t0 < VOICE_TIMEOUT_MS + 5000) {
     renderFrame();                                 // экран живёт: Thinking... / Speaking...
     delay(100);
   }
-  if (voiceResult != 1) toast("Voice error");
+  int result = voiceResult;
+  bool listen = voiceListen;
   voiceState = VS_IDLE;
   voiceBusy = false;
+  if (wake) {
+    wakeTrigger = false;                       // звук своего же ответа — не новая фраза
+    if (result == VOICE_BUSY) wakeBackoffUntil = millis() + WAKE_BUSY_MS;
+    else if (result != 1) wakeBackoffUntil = millis() + WAKE_BACKOFF_MS;
+    if (result == 1 && listen) voiceDialog(false);   // прозвучало только «Джарвис» — вопрос
+    return;
+  }
+  if (result != 1) toast("Voice error");
+}
+
+// V3: речь без хлопка — может быть «Джарвис…»
+void checkWake() {
+  if (!wakeTrigger) return;
+  wakeTrigger = false;
+  if (!WAKE_ENABLED || !VOICE_ENABLED || setupMode || !serverOk || clapCount > 0) return;
+  if ((long)(millis() - wakeBackoffUntil) < 0) return;
+  voiceDialog(true);
 }
 
 // ===== Команды хлопками =====
@@ -1072,6 +1118,8 @@ void loop() {
   if (Serial.available() && Serial.read() == 'w') water("manual");
 
   handleSetup();
+
+  checkWake();
 
   if (clapCount > 0 && millis() - lastClap > CLAP_WAIT) {
     int n = clapCount;

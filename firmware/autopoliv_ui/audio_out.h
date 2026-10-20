@@ -16,6 +16,17 @@
 #define AUDIO_NONE 0
 #define AUDIO_PDM 1
 #define AUDIO_I2S_MAX98357 2
+// V3: «Джарвис» без хлопка. Устройство слушает фон; речь дольше WAKE_MIN_MS (хлопок короче
+// 150 мс её не запускает) записывается и уходит на /api/voice?wake=1 — сервер распознаёт
+// фразу и отвечает, только если она начинается с «Джарвис». Поток — только когда звучит речь.
+#ifndef WAKE_ENABLED
+#define WAKE_ENABLED 1
+#endif
+static const int WAKE_LEVEL = 400;                    // размах АЦП за 10 мс: выше — звук
+static const unsigned long WAKE_MIN_MS = 250;         // столько подряд — это речь, а не хлопок
+static const unsigned long WAKE_GAP_MS = 120;         // паузы между слогами короче — не обрыв
+static const unsigned long WAKE_BACKOFF_MS = 2000;    // после фразы без обращения
+static const unsigned long WAKE_BUSY_MS = 30000;      // сервер ответил 429 — много лишних фраз
 #ifndef AUDIO_OUT              // можно задать флагом сборки: -D AUDIO_OUT=AUDIO_PDM
 #define AUDIO_OUT AUDIO_NONE
 #endif
