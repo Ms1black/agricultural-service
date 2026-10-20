@@ -45,6 +45,20 @@ MIGRATIONS: list[list[str]] = [
             note TEXT
         )""",
     ],
+    # 2 — реестр моделей (M1/M2): на каких данных обучена, метрики, рабочая версия
+    [
+        """CREATE TABLE IF NOT EXISTS models (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task TEXT NOT NULL,
+            version TEXT NOT NULL,
+            created REAL NOT NULL,
+            metrics_json TEXT NOT NULL,
+            is_champion INTEGER NOT NULL DEFAULT 0,
+            trained_on_json TEXT NOT NULL DEFAULT '{}',
+            path TEXT NOT NULL DEFAULT ''
+        )""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_models_task_version ON models(task, version)",
+    ],
 ]
 
 

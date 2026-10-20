@@ -19,6 +19,8 @@ class Settings:
     insecure: bool = False
     # Команда полива из веба ждёт устройство не дольше этого времени.
     command_ttl_s: int = 120
+    # Файлы моделей (M1); пусто — рядом с базой: <каталог PLANT_DB>/models
+    models_dir: str = ""
     # LLM (задача L1): gigachat | openai | none. Без ключа LLM выключена.
     llm_provider: str = "gigachat"
     llm_timeout_s: float = 30
@@ -39,6 +41,7 @@ class Settings:
             web_user=os.environ.get("PLANT_WEB_USER", cls.web_user),
             web_password=os.environ.get("PLANT_WEB_PASSWORD", ""),
             insecure=_flag("PLANT_INSECURE"),
+            models_dir=os.environ.get("PLANT_MODELS_DIR", ""),
             llm_provider=os.environ.get("LLM_PROVIDER", cls.llm_provider).strip().lower(),
             llm_timeout_s=float(os.environ.get("LLM_TIMEOUT_S", cls.llm_timeout_s)),
             gigachat_auth_key=os.environ.get("GIGACHAT_AUTH_KEY", "").strip(),
@@ -49,6 +52,11 @@ class Settings:
             openai_api_key=os.environ.get("OPENAI_API_KEY", "").strip(),
             openai_model=os.environ.get("OPENAI_MODEL", cls.openai_model),
         )
+
+    @property
+    def models_path(self) -> str:
+        return self.models_dir or os.path.join(os.path.dirname(os.path.abspath(self.db_path)),
+                                               "models")
 
     def check(self) -> None:
         """На облаке токен и пароль обязательны: без них сервис не стартует."""

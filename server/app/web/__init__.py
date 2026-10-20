@@ -122,6 +122,12 @@ def calibration(req: CalibrationRequest, request: Request) -> dict:
     return {"dry_raw": dry, "wet_raw": wet}
 
 
+@router.get("/web/api/forecast")
+def forecast(request: Request, device: str = "plant1") -> dict:
+    from ..ml.forecast import forecast as make_forecast
+    return make_forecast(request.app.state.db, device)
+
+
 @router.post("/web/api/chat")
 def chat(req: ChatRequest, request: Request) -> dict:
     if not req.messages or req.messages[-1].role != "user":
