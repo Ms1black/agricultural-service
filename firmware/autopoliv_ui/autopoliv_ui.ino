@@ -135,6 +135,12 @@ time_t lastWaterEpoch = 0;          // время последнего поли�
 int nextWaterH = -1;                // прогноз: через сколько часов полив (-1 — нет прогноза)
 unsigned long nextWaterAt = 0;      // когда получен прогноз
 int calibStage = 0;                 // 1–3 — идёт калибровка
+bool demoMode = false;              // D1: сервер в демо-режиме — метка DEMO в шапке
+const unsigned long NEXT_FRESH_MS = 600000;   // прогноз старше 10 мин (нет связи) не показываем
+
+// ===== Голосовой помощник: состояние для полосы внизу экрана (F3, V2) =====
+enum VoiceState { VS_IDLE, VS_LISTEN, VS_THINK, VS_SPEAK };
+volatile VoiceState voiceState = VS_IDLE;
 
 // ===== Офлайн-буфер телеметрии (F2) =====
 // Сервер недоступен — замеры копятся в RAM и досылаются с полем age_s
@@ -353,7 +359,14 @@ void drawHeader(const char* title) {
     canvas.setTextColor(C_INK);
     canvas.drawString("Setup: " + WiFi.softAPIP().toString(), 6, 3);
   } else {
-    drawSparkline(6, 3, 126, 15);      // вместо названия — график звука
+    drawSparkline(6, 3, demoMode ? 92 : 126, 15);   // вместо названия — график звука
+  }
+  if (demoMode) {                      // D1: демо-режим помечен на экране
+    canvas.fillRoundRect(102, 4, 34, 14, 3, C_INK);
+    canvas.setFont(&fonts::Font0);
+    canvas.setTextDatum(textdatum_t::middle_center);
+    canvas.setTextColor(C_BG);
+    canvas.drawString("DEMO", 119, 11);
   }
   drawWifiIcon(148, 15, wifiOk && serverOk);
   canvas.fillRect(6, 21, 148, 2, C_INK);
@@ -393,6 +406,8 @@ void drawCell(int x, int y, int w, int h, const char* label, bool degree, const 
 
 bool clockOk() { return time(nullptr) > 1700000000; }
 
+String nextText(int hours);
+
 String agoText() {
   unsigned long m;
   if (everWatered) m = (millis() - lastWater) / 60000;
@@ -425,17 +440,41 @@ void drawMainScreen() {
   drawCell(0, top + h + 1, w, h, "Air RH, %", false, "",
            isnan(curHum) ? String("--") : String((int)round(curHum)), false);
 
-  // Последний полив
-  drawCell(w, top + h + 1, w, h, "Watered", false, "", agoText(), false);
+  // Следующий полив по прогнозу сервера; без связи — время с последнего полива, как раньше
+  if (nextWaterH >= 0 && serverOk && millis() - nextWaterAt < NEXT_FRESH_MS) {
+    drawCell(w, top + h + 1, w, h, "Next", false, "", nextText(nextWaterH), false);
+  } else {
+    drawCell(w, top + h + 1, w, h, "Watered", false, "", agoText(), false);
+  }
 }
 
-void drawToast() {
-  if (millis() > toastUntil || toastText.length() == 0) return;
+String nextText(int hours) {
+  if (hours <= 0) return "now";
+  if (hours < 48) return String(hours) + "h";
+  return String(hours / 24) + "d";
+}
+
+void drawBar(const String& text) {
   canvas.fillRect(0, 108, 160, 20, C_INK);
   canvas.setFont(&fonts::Font2);
   canvas.setTextDatum(textdatum_t::middle_center);
   canvas.setTextColor(C_BG);
-  canvas.drawString(toastText, 80, 118);
+  canvas.drawString(text, 80, 118);
+}
+
+// Полоса внизу: сообщение > голосовой помощник > калибровка
+void drawToast() {
+  if (millis() <= toastUntil && toastText.length() > 0) {
+    drawBar(toastText);
+  } else if (voiceState == VS_LISTEN) {
+    drawBar("Listening...");
+  } else if (voiceState == VS_THINK) {
+    drawBar("Thinking...");
+  } else if (voiceState == VS_SPEAK) {
+    drawBar("Speaking...");
+  } else if (calibStage >= 1 && calibStage <= 3) {
+    drawBar("Calibrating " + String(calibStage) + "/3");
+  }
 }
 
 void renderFrame() {
@@ -545,6 +584,7 @@ void handleResponse(const String& resp) {
   if (ml) serverMlAt = millis();
 
   calibStage = doc["calib_stage"] | 0;
+  demoMode = doc["demo"] | false;
   nextWaterH = doc["next_water_h"] | -1;
   nextWaterAt = millis();
 
