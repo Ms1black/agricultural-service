@@ -726,8 +726,10 @@ String htmlEscape(const String& s) {
   return r;
 }
 
-// Сканирование асинхронное: отдаём прошлый результат и запускаем новое
-void refreshScan() {
+// Сканирование асинхронное: забираем готовый результат; новое — только по запросу.
+// Во время сканирования точка доступа переключает канал и на миг пропадает: iPhone
+// открывает страницу несколькими запросами и на этом обрывается — поэтому не на каждый запрос.
+void refreshScan(bool start) {
   int n = WiFi.scanComplete();
   if (n == WIFI_SCAN_RUNNING) return;
   if (n >= 0) {
@@ -740,7 +742,7 @@ void refreshScan() {
     }
     WiFi.scanDelete();
   }
-  WiFi.scanNetworks(true);
+  if (start) WiFi.scanNetworks(true);
 }
 
 const char PAGE_HEAD[] PROGMEM = R"html(<!doctype html><html lang="ru"><head><meta charset="utf-8">
@@ -751,11 +753,14 @@ li{padding:8px;border-bottom:1px solid #ddd;cursor:pointer;list-style:none}ul{pa
 small{color:#666}</style></head><body>)html";
 
 void handleRoot() {
-  refreshScan();
+  refreshScan(web.hasArg("scan"));
   String p = FPSTR(PAGE_HEAD);
   p += "<h2>Настройка автополива</h2><form id=f method=post action=/save>";
   p += "<label>Сеть Wi-Fi</label><input name=ssid required value=\"" + htmlEscape(cfgSsid) + "\">";
-  p += "<ul>" + (scanItems.length() ? scanItems : String("<li>Поиск сетей… обновите страницу</li>")) + "</ul>";
+  bool scanning = WiFi.scanComplete() == WIFI_SCAN_RUNNING;
+  p += "<ul>" + (scanItems.length() ? scanItems : String(scanning ?
+       "<li>Поиск сетей… обновите через 5 секунд</li>" : "<li>Сетей не найдено</li>")) + "</ul>";
+  p += "<small><a href=\"/?scan=1\">Обновить список сетей</a></small><br><br>";
   p += "<label>Пароль Wi-Fi</label><input name=pass type=password placeholder=\"пусто — не менять\">";
   p += "<label>Адрес сервера</label><input name=server placeholder=\"http://192.168.1.100:8000\" value=\"" +
        htmlEscape(cfgServer) + "\">";
@@ -764,6 +769,7 @@ void handleRoot() {
   p += "<button>Сохранить и перезагрузить</button></form>";
   p += "<small>Пароль Wi-Fi можно не вводить, если сеть та же. Для открытой сети выберите её и оставьте пароль пустым.</small>";
   p += "</body></html>";
+  web.sendHeader("Cache-Control", "no-store");
   web.send(200, "text/html; charset=utf-8", p);
 }
 
@@ -804,6 +810,12 @@ void startSetup() {
   if (!routes) {
     web.on("/", HTTP_GET, handleRoot);
     web.on("/save", HTTP_POST, handleSave);
+    // Проверки «есть ли интернет» телефонов и ПК — сразу форма, телефон покажет её как вход в сеть
+    for (const char* probe : {"/hotspot-detect.html", "/library/test/success.html",
+                              "/generate_204", "/gen_204", "/connecttest.txt", "/ncsi.txt",
+                              "/canonical.html", "/success.txt"}) {
+      web.on(probe, HTTP_GET, handleRoot);
+    }
     web.onNotFound(handleRedirect);
     routes = true;
   }
