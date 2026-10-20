@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 
-from . import calibration, store
+from . import calibration, decision, store
 from .auth import require_device
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_device)])
@@ -58,6 +58,15 @@ def telemetry(t: Telemetry, request: Request) -> Response:
         calibration.on_telemetry(db, t.device)
     except Exception:  # калибровка не должна ломать приём телеметрии
         logging.getLogger("calibration").exception("ошибка шага калибровки")
+    try:
+        decision.step(db, t.device)
+    except Exception:  # без решения сервера устройство поливает по своему порогу
+        logging.getLogger("decision").exception("ошибка модуля решений")
+    try:
+        from .ml import monitor
+        monitor.on_telemetry(db, t.device)
+    except Exception:
+        logging.getLogger("ml").exception("ошибка мониторинга прогноза")
 
     resp: dict = {"command": "none"}
     cmd = store.take_command(db, t.device, settings.command_ttl_s)
@@ -69,6 +78,8 @@ def telemetry(t: Telemetry, request: Request) -> Response:
         resp["wet"] = cal["wet_raw"]
         if 1 <= (cal.get("stage") or 0) <= 3:
             resp["calib_stage"] = cal["stage"]       # F3: полоса Calibrating N/3
+    if decision.active_mode(db, t.device) == "ml":
+        resp["mode"] = "ml"                          # D0: локальный автополив молчит
     return compact_json(resp)
 
 

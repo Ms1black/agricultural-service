@@ -73,7 +73,21 @@ def describe(db: Database, device: str, now: float | None = None) -> str:
     else:
         lines.append("Поливов в журнале пока нет.")
     lines.append(forecast_line(db, device))
+    lines.extend(decision_lines(db, device, now))
     return "\n".join(lines)
+
+
+def decision_lines(db: Database, device: str, now: float) -> list[str]:
+    from .. import decision
+    st = decision.status(db, device)
+    out = [f"Режим полива: {st['active']}" + (
+        f" (выбран ml, но {st['ml_reason']})" if st["mode"] == "ml" and not st["ml_available"]
+        else "") + "."]
+    recent = decision.recent(db, device, 5)
+    if recent:
+        out.append("Последние решения сервера (новые сверху):")
+        out += [f"- {ago(now - d['ts'])}: {d['action']} — {d['reason']}" for d in recent]
+    return out
 
 
 def forecast_line(db: Database, device: str) -> str:

@@ -1,6 +1,7 @@
 """Обучение прогноза высыхания (M1): оценка против бейзлайнов → регистрация → отчёт."""
 
 import json
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -8,15 +9,18 @@ import pandas as pd
 from ..db import Database
 from . import evaluate as ev
 from . import model as fm
-from . import registry
+from . import policy_sim, registry
 from .datasets import data_dir, sources
 from .prepare import prepare, quality
 
 
 def open_data(root: Path | None = None) -> tuple[pd.DataFrame, dict]:
-    """Примеры из пригодных рядов открытых датасетов + описание, на чём обучаемся."""
+    """Примеры из пригодных рядов открытых датасетов + описание, на чём обучаемся.
+
+    Подготовленные ряды целиком — в trained_on["_series"] (для симуляции политик, не сохраняются).
+    """
     root = root or data_dir()
-    parts, used = [], []
+    parts, used, frames = [], [], []
     for key, s in sources().items():
         folder = root / key
         if s.auxiliary or not folder.is_dir():
@@ -27,6 +31,7 @@ def open_data(root: Path | None = None) -> tuple[pd.DataFrame, dict]:
             if not q.usable:
                 continue
             parts.append(fm.samples(df))
+            frames.append(df)
             used.append({"source": key, "series": q.series, "cycles": q.cycles,
                          "from": f"{raw['ts'].iloc[0]:%Y-%m-%d}",
                          "to": f"{raw['ts'].iloc[-1]:%Y-%m-%d}"})
@@ -34,7 +39,57 @@ def open_data(root: Path | None = None) -> tuple[pd.DataFrame, dict]:
         raise RuntimeError(f"Нет данных в {root}. Сначала: python -m app.ml.datasets download")
     data = pd.concat(parts, ignore_index=True)
     return data, {"sources": sorted({u["source"] for u in used}), "series": used,
-                  "own_cycles": 0}
+                  "own_cycles": 0, "_series": frames}
+
+
+OWN_MIN_CYCLES = 3
+RECENT_DAYS = 7
+
+
+def with_own_data(db: Database, data: pd.DataFrame, trained_on: dict,
+                  now: float | None = None) -> tuple[pd.DataFrame, dict]:
+    """Добавить данные своих устройств, если у устройства ≥ 3 полных циклов (M2)."""
+    from .. import store
+    from .forecast import device_frame
+    now = now or time.time()
+    parts = [data]
+    for device in store.devices(db):
+        df = device_frame(db, device, now, days=365)
+        if df is None:
+            continue
+        cal = store.get_calibration(db, device) or {}
+        own = fm.samples(df, cal.get("target_low") or fm.DEFAULT_THRESHOLD)
+        cycles = int(fm.ttt_rows(own)["cycle"].nunique())
+        if cycles < OWN_MIN_CYCLES:
+            continue
+        own["source"], own["series"] = "device", f"device/{device}"
+        parts.append(own)
+        trained_on = {**trained_on, "own_cycles": trained_on.get("own_cycles", 0) + cycles,
+                      "sources": sorted({*trained_on["sources"], "device"}),
+                      "series": [*trained_on["series"], {
+                          "source": "device", "series": f"device/{device}", "cycles": cycles,
+                          "from": f"{df['ts'].iloc[0]:%Y-%m-%d}",
+                          "to": f"{df['ts'].iloc[-1]:%Y-%m-%d}"}]}
+    return pd.concat(parts, ignore_index=True), trained_on
+
+
+def _pick(r: dict) -> dict:
+    return {"ttt_mae_h": r.get("model_ttt_mae_h"), "mae_6h": r.get("model_mae_6h")}
+
+
+def recent_comparison(db: Database, data: pd.DataFrame, kind: str) -> tuple[dict, dict] | None:
+    """6.6: новая модель (без последних 7 дней своих данных) и текущая рабочая — на них."""
+    own = data[data["source"] == "device"]
+    champ = registry.champion(db, registry.TASK_DRYING)
+    if own.empty or champ is None:
+        return None
+    cut = own["ts"].max() - pd.Timedelta(days=RECENT_DAYS)
+    recent = own[own["ts"] > cut]
+    if recent.empty:
+        return None
+    challenger = fm.ForecastModel(kind).fit(data.drop(recent.index))
+    return (_pick(ev.score(challenger, recent)),
+            _pick(ev.score(registry.load(champ), recent)))
 
 
 def train(db: Database, models_dir: str, data: pd.DataFrame, trained_on: dict,
@@ -52,6 +107,9 @@ def train(db: Database, models_dir: str, data: pd.DataFrame, trained_on: dict,
     final = fm.ForecastModel(kind).fit(data)
     final.residuals = probe.residuals
 
+    frames = trained_on.pop("_series", None)
+    policy = policy_sim.compare(frames, final) if frames else None
+
     metrics = {
         "kind": kind,
         "mae_6h": best["model_mae_6h"], "mae_12h": best["model_mae_12h"],
@@ -67,8 +125,13 @@ def train(db: Database, models_dir: str, data: pd.DataFrame, trained_on: dict,
                                               best["mean_rate_ttt_mae_h"])
             and best["model_mae_6h"] <= best["linear_mae_6h"]),
         "time_split": results, "leave_one_source_out": loso, "adaptation": curve,
+        "policy_sim": policy,
     }
-    entry = registry.save(db, models_dir, registry.TASK_DRYING, final, metrics, trained_on)
+    recent = recent_comparison(db, data, kind)
+    if recent:
+        metrics["recent_7d"] = {"challenger": recent[0], "champion": recent[1]}
+    entry = registry.save(db, models_dir, registry.TASK_DRYING, final, metrics, trained_on,
+                          recent=recent)
     if report_path:
         write_report(report_path, entry, metrics, trained_on)
     return {**entry, "metrics": metrics}
@@ -115,6 +178,34 @@ def write_report(path: Path, entry: dict, m: dict, trained_on: dict) -> None:
         name = "**среднее**" if series == "_mean" else series
         lines.append(f"| {name} | " + " | ".join(str(p["ttt_mae_h"]) for p in pts) + " |")
     lines += ["", "Значения — MAE времени до порога, ч.", ""]
+    if m.get("policy_sim"):
+        t, ml = m["policy_sim"]["total"]["threshold"], m["policy_sim"]["total"]["ml"]
+        lines += [
+            "## Политика полива: threshold против ml (6.4, офлайн-симуляция)", "",
+            "Высыхание — как в реальных рядах, отклик на полив — "
+            f"{policy_sim.K_DOSE:g} %/с. threshold — как прошивка (ниже 30 % — 3 с), ml — по "
+            "прогнозу и дозе до 65 % с лимитами раздела 5. "
+            f"Всего {t['days']:g} суток.", "",
+            "| Метрика | threshold | ml |", "|---|---|---|",
+            f"| Время в диапазоне 30–70 % | {t['in_range_share']:.1%} "
+            f"| {ml['in_range_share']:.1%} |",
+            f"| Часы пересыхания (< 30 %) | {t['hours_dry']:g} | {ml['hours_dry']:g} |",
+            f"| Часы перелива (> 70 %) | {t['hours_wet']:g} | {ml['hours_wet']:g} |",
+            f"| Средняя влажность, % | {t['mean_soil']:g} | {ml['mean_soil']:g} |",
+            f"| Число поливов | {t['waterings']} | {ml['waterings']} |",
+            f"| Работа насоса, с (≈ расход воды) | {t['pump_seconds']:g} "
+            f"| {ml['pump_seconds']:g} |",
+            "", "| Ряд | В диапазоне (thr / ml) | Пересыхание, ч | Поливов |", "|---|---|---|---|"]
+        for name, r in m["policy_sim"]["per_series"].items():
+            a, b = r["threshold"], r["ml"]
+            lines.append(f"| {name} | {a['in_range_share']:.1%} / {b['in_range_share']:.1%} "
+                         f"| {a['hours_dry']:g} / {b['hours_dry']:g} "
+                         f"| {a['waterings']} / {b['waterings']} |")
+        lines += ["", "threshold держит почву у самого края пересыхания (средняя влажность "
+                  "≈ порог) и включает насос в разы чаще; ml держит середину диапазона. Прогноз в "
+                  "симуляции не адаптирован под ряд — на быстро сохнущем горшке это даёт часы "
+                  "пересыхания; адаптация (6.3) и режим ml только при уверенной калибровке (C1) "
+                  "нужны именно поэтому.", ""]
     path.write_text("\n".join(lines), encoding="utf-8")
 
 

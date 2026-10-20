@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .. import calibration as cb
-from .. import store
+from .. import decision, store
 from ..auth import require_web
 from ..llm import LLMError
 from ..llm.context import build_messages
@@ -229,6 +229,83 @@ def calibration_action(action: str, request: Request, device: str = "plant1") ->
     except ValueError as e:
         raise HTTPException(409, str(e)) from e
     return calibration_state(db, device)
+
+
+class ModeRequest(BaseModel):
+    device: str = "plant1"
+    mode: str
+
+
+@router.get("/web/api/mode")
+def mode_get(request: Request, device: str = "plant1") -> dict:
+    return decision.status(request.app.state.db, device)
+
+
+@router.post("/web/api/mode")
+def mode_set(req: ModeRequest, request: Request) -> dict:
+    try:
+        return decision.set_mode(request.app.state.db, req.device, req.mode)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.get("/web/api/decisions")
+def decisions(request: Request, device: str = "plant1") -> list[dict]:
+    return decision.recent(request.app.state.db, device)
+
+
+@router.get("/web/api/waterings")
+def waterings(request: Request, device: str = "plant1", hours: float = 24) -> list[dict]:
+    """Поливы за период — отметки на графике (с причиной)."""
+    hours = max(0.1, min(hours, 24 * 3650))
+    with request.app.state.db.conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT ts, value, note FROM events WHERE device = ? AND type = 'water' AND ts >= ? "
+            "ORDER BY ts", (device, time.time() - hours * 3600))]
+
+
+MODEL_KEYS = ("kind", "mae_6h", "mae_12h", "mae_24h", "ttt_mae_h", "ttt_median_h",
+              "ttt_within_3h", "gain_ttt_vs_linear", "beats_baseline", "baselines", "adaptation",
+              "leave_one_source_out")
+
+
+@router.get("/web/api/model")
+def model_card(request: Request) -> dict:
+    """Карточка модели (W1) и история версий (M2)."""
+    from ..ml import registry
+    db = request.app.state.db
+    champ = registry.champion(db, registry.TASK_DRYING)
+    history = registry.history(db, registry.TASK_DRYING)
+    policy = next((h["metrics"]["policy_sim"] for h in history
+                   if h["metrics"].get("policy_sim")), None)
+    from ..ml.monitor import actual_error
+    return {
+        "champion": champ and {"version": champ["version"], "created": champ["created"],
+                               "trained_on": champ["trained_on"],
+                               "metrics": {k: champ["metrics"].get(k) for k in MODEL_KEYS}},
+        "policy_sim": policy and policy["total"],
+        "history": [{"version": h["version"], "created": h["created"],
+                     "is_champion": h["is_champion"], "ttt_mae_h": h["metrics"].get("ttt_mae_h"),
+                     "mae_6h": h["metrics"].get("mae_6h"),
+                     "sources": h["trained_on"].get("sources", []),
+                     "own_cycles": h["trained_on"].get("own_cycles", 0)} for h in history],
+        "monitoring": actual_error(db),
+    }
+
+
+@router.get("/web/api/demo/series")
+def demo_series() -> list[str]:
+    from ..ml import demo
+    return sorted(demo.series())
+
+
+@router.get("/web/api/demo")
+def demo_view(request: Request, series: str, hours: float = 24) -> dict:
+    from ..ml import demo
+    try:
+        return demo.view(request.app.state.db, series, max(1.0, min(hours, 24 * 3650)))
+    except KeyError as e:
+        raise HTTPException(404, "нет такого ряда (скачайте открытые датасеты)") from e
 
 
 @router.get("/web/api/export.csv")

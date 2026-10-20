@@ -52,6 +52,9 @@ const unsigned long CLAP_MAX_MS = 150;
 const unsigned long WATER_MS    = 3000;
 const unsigned long COOLDOWN_MS = 60000;
 const bool AUTO_WATER = true;
+// Режим ml (D0): поливает сервер по прогнозу, локальный порог молчит — но только пока
+// сервер на связи. Без ответа сервера дольше этого времени — снова локальный порог.
+const unsigned long SERVER_ML_TIMEOUT_MS = 600000;
 
 int soilDryCal = 4000;
 int soilWetCal = 1150;
@@ -130,6 +133,8 @@ int   soilRaw = 0, soilSpread = 0;
 bool  soilDry = false;
 
 bool wifiOk = false, serverOk = false;
+bool serverMl = false;              // последний ответ сервера: режим ml
+unsigned long serverMlAt = 0;
 
 Preferences prefs;
 WebServer web(80);
@@ -502,10 +507,20 @@ void sendTelemetry() {
     toast("Calibration updated");
   }
 
+  bool ml = resp.indexOf("\"mode\":\"ml\"") >= 0;
+  if (ml != serverMl) Serial.printf("Режим полива: %s\n", ml ? "ml (решает сервер)" : "порог");
+  serverMl = ml;
+  if (ml) serverMlAt = millis();
+
   if (resp.indexOf("\"command\":\"water\"") >= 0) {
     int sec = constrain(jsonInt(resp, "seconds", 3), 1, 10);
     water("web", sec * 1000UL);
   }
+}
+
+// Сервер в режиме ml и отвечал недавно — локальный автополив не нужен
+bool serverDecides() {
+  return serverMl && millis() - serverMlAt < SERVER_ML_TIMEOUT_MS;
 }
 
 // ===== Датчики =====
@@ -524,7 +539,7 @@ void updateSensors() {
                 curTemp, curHum, curSoil, soilRaw, soilDry ? "сухо" : "мокро");
 
   bool cooldownDone = !everWatered || millis() - lastWater > COOLDOWN_MS;
-  if (AUTO_WATER && needWater(curSoil) && cooldownDone) {
+  if (AUTO_WATER && needWater(curSoil) && cooldownDone && !serverDecides()) {
     water(curSoil < 0 ? "auto-D0" : "auto");
   }
 }

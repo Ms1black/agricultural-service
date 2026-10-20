@@ -51,6 +51,23 @@
   #cal-hint.warn { color:#c44; }
   details summary { cursor:pointer; color:var(--muted); margin:8px 0; }
   #chat-input { flex:1; min-width:180px; }
+  .two { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px; }
+  .card { border:1px solid var(--faint); border-radius:6px; padding:10px 12px; background:#fff8; }
+  .card h3 { font-size:14px; margin:0 0 6px; }
+  svg.small { height:150px; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  tr.best td { font-weight:700; }
+  #source-note { color:var(--accent); }
+  .table-wrap { overflow-x:auto; }
+  /* Режим записи экрана: ?present=1 — крупно, без служебных элементов */
+  body.present { font-size:18px; }
+  body.present main { max-width:1200px; }
+  body.present .cell .value { font-size:40px; }
+  body.present svg { height:300px; }
+  body.present svg.small { height:200px; }
+  body.present [data-service] { display:none !important; }
+  /* Открытый датасет — только данные и модель; блоки устройства скрыты */
+  body.demo [data-device] { display:none !important; }
 </style>
 </head>
 <body>
@@ -58,7 +75,7 @@
   <header>
     <h1>Автополив</h1>
     <div class="row">
-      <label>Устройство <select id="device"><option>plant1</option></select></label>
+      <label>Данные <select id="device"><option value="plant1">устройство plant1</option></select></label>
       <span id="online" class="muted"></span>
     </div>
   </header>
@@ -69,22 +86,53 @@
     <div class="cell"><div class="label">Влажность воздуха, %</div><div class="value" id="hum">--</div></div>
     <div class="cell"><div class="label">Последний полив</div><div class="value" id="watered">--</div></div>
     <div class="cell"><div class="label">Следующий полив</div><div class="value" id="next">--</div></div>
+    <div class="cell" id="c-status"><div class="label">Устройство</div><div class="value" id="status">--</div></div>
   </div>
   <p class="muted" id="raw"></p>
+  <p class="muted" id="source-note" hidden></p>
 
   <h2>Влажность почвы</h2>
   <div class="row">
     <select id="hours">
       <option value="6">6 ч</option><option value="24" selected>24 ч</option>
-      <option value="72">3 дня</option><option value="168">неделя</option>
+      <option value="72">3 дня</option><option value="168">7 дней</option>
+      <option value="87600">всё время</option>
     </select>
+    <span class="muted">Отметки сверху — поливы (наведите — причина); пунктир — прогноз ИИ.</span>
   </div>
   <svg id="chart" viewBox="0 0 900 220" preserveAspectRatio="none"></svg>
   <p class="muted" id="fc-note"></p>
 
+  <h2>Модель прогноза</h2>
+  <p class="muted" id="model-note">Модель ещё не обучена.</p>
+  <div class="two">
+    <div class="card">
+      <h3>Ошибка времени до порога, ч (меньше — лучше)</h3>
+      <svg id="model-bars" class="small" viewBox="0 0 400 150" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="card">
+      <h3>Адаптация под своё растение: ошибка от числа своих циклов, ч</h3>
+      <svg id="adapt-curve" class="small" viewBox="0 0 400 150" preserveAspectRatio="none"></svg>
+    </div>
+  </div>
+  <div class="table-wrap"><table><thead><tr><th>Метрика</th><th class="num">Модель</th>
+    <th class="num">Persistence</th><th class="num">Линейная 6 ч</th><th class="num">Средняя скорость</th>
+  </tr></thead><tbody id="model-table"></tbody></table></div>
+  <p class="muted" id="model-monitor"></p>
+  <details data-service><summary>История версий модели</summary>
+    <div class="table-wrap"><table><thead><tr><th>Версия</th><th>Рабочая</th><th class="num">До порога, ч</th>
+      <th class="num">MAE 6 ч</th><th>Данные</th></tr></thead><tbody id="model-history"></tbody></table></div>
+  </details>
+
+  <h2>Политика полива: порог против ИИ</h2>
+  <p class="muted">Офлайн-симуляция на реальных кривых высыхания открытых датасетов (метрики 6.4).</p>
+  <div class="table-wrap"><table><thead><tr><th>Метрика</th><th class="num">По порогу</th>
+    <th class="num">По прогнозу ИИ</th></tr></thead><tbody id="policy-table"></tbody></table></div>
+
+  <section data-device>
   <h2>Спросить ИИ о растении</h2>
   <div id="chat-log"></div>
-  <form id="chat-form" class="row">
+  <form id="chat-form" class="row" data-service>
     <input id="chat-input" placeholder="Например: как там мой цветок?" maxlength="500" autocomplete="off">
     <button id="chat-send">Спросить</button>
     <button type="button" class="ghost" id="why">Почему полили?</button>
@@ -100,19 +148,31 @@
   <p class="muted">Ответы на фразы, сказанные устройству, звучат здесь, если звук включён.</p>
   <div id="voice-log"></div>
 
-  <h2>Полив</h2>
-  <div class="row">
+  <h2 data-service>Полив</h2>
+  <div class="row" data-service>
     <input type="number" id="seconds" min="1" max="10" value="3"> с
     <button id="water">Полить</button>
     <span class="muted">Команда уйдёт с ближайшей телеметрией (до 30 с), действует 2 мин.</span>
   </div>
+
+  <h2>Режим полива</h2>
+  <div class="row" data-service>
+    <select id="mode">
+      <option value="threshold">По порогу 30 % (решает устройство)</option>
+      <option value="ml">По прогнозу ИИ (решает сервер)</option>
+    </select>
+    <span id="mode-msg" class="muted"></span>
+  </div>
+  <h2>Журнал решений</h2>
+  <table><thead><tr><th>Время</th><th>Решение</th><th>Причина</th></tr></thead>
+    <tbody id="decisions"></tbody></table>
 
   <h2>Калибровка под растение</h2>
   <div class="steps" id="cal-steps">
     <div>0. Профиль</div><div>1. Датчик</div><div>2. Доза</div><div>3. Высыхание</div><div>Готово</div>
   </div>
   <p id="cal-hint"></p>
-  <div class="row">
+  <div class="row" data-service>
     <select id="cal-type"></select>
     <input type="number" id="cal-low" min="0" max="100" title="нижняя граница, %"> –
     <input type="number" id="cal-high" min="0" max="100" title="верхняя граница, %"> %
@@ -123,7 +183,7 @@
   </div>
   <table><tbody id="cal-params"></tbody></table>
   <p class="muted" id="cal-anomalies"></p>
-  <details>
+  <details data-service>
     <summary>Ручная калибровка датчика и сброс</summary>
     <div class="row">
       Сухо <input type="number" id="dry" min="0" max="4095">
@@ -136,22 +196,31 @@
   </details>
   <p id="msg" class="muted"></p>
 
-  <h2>События</h2>
-  <table><thead><tr><th>Время</th><th>Тип</th><th>Значение</th><th>Причина</th></tr></thead>
-    <tbody id="events"></tbody></table>
+  </section>
+  <h2 data-service>События</h2>
+  <div class="table-wrap" data-service><table><thead><tr><th>Время</th><th>Тип</th><th>Значение</th>
+    <th>Причина</th></tr></thead><tbody id="events"></tbody></table></div>
 
-  <h2>Данные</h2>
-  <div class="row">
+  <h2 data-service>Данные</h2>
+  <div class="row" data-service>
     <a href="web/api/export.csv?table=measurements">measurements.csv</a>
     <a href="web/api/export.csv?table=events">events.csv</a>
   </div>
 </main>
 <script>
 const $ = id => document.getElementById(id);
-const dev = () => $('device').value;
+const PRESENT = new URLSearchParams(location.search).get('present') === '1';
+if (PRESENT) document.body.classList.add('present');
+// Источник: «plant1» — устройство, «demo:<ряд>» — открытый датасет
+const isDemo = () => $('device').value.startsWith('demo:');
+const dev = () => isDemo() ? 'plant1' : $('device').value;
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;',
+                                                            '"':'&quot;', "'":'&#39;' })[c]);
 const fmtTime = ts => new Date(ts * 1000).toLocaleString('ru-RU');
-const NOTES = { auto:'авто', 'auto-D0':'авто (D0)', claps:'хлопки', web:'веб', manual:'вручную',
-                voice:'голос', ml:'модель', start:'запуск' };
+const NOTES = { auto:'авто (порог)', 'auto-D0':'авто (D0)', claps:'хлопки', web:'кнопка на сайте',
+                manual:'вручную', voice:'голос', ml:'прогноз ИИ', calib:'калибровка', start:'запуск',
+                inferred:'найден по росту влажности', dataset:'из датасета' };
+let calib = null;              // последняя калибровка — для линий диапазона на графике
 
 function ago(sec) {
   const m = Math.floor(sec / 60);
@@ -172,11 +241,15 @@ async function api(path, body) {
 function say(text) { $('msg').textContent = text; }
 
 async function loadDevices() {
-  const list = await api('web/api/devices');
-  if (!list.length) return;
-  const cur = dev();
-  $('device').innerHTML = list.map(d => `<option>${d}</option>`).join('');
-  if (list.includes(cur)) $('device').value = cur;
+  const [list, demo] = await Promise.all([api('web/api/devices'),
+                                          api('web/api/demo/series').catch(() => [])]);
+  const cur = $('device').value;
+  const devices = list.length ? list : ['plant1'];
+  $('device').innerHTML =
+    devices.map(d => `<option value="${esc(d)}">устройство ${esc(d)}</option>`).join('') +
+    (demo.length ? '<optgroup label="Открытый датасет (демонстрация)">' + demo.map(s =>
+      `<option value="demo:${esc(s)}">${esc(s)}</option>`).join('') + '</optgroup>' : '');
+  if ([...$('device').options].some(o => o.value === cur)) $('device').value = cur;
 }
 
 async function loadState() {
@@ -186,6 +259,8 @@ async function loadState() {
     const age = s.now - m.ts;
     $('online').textContent = (age < 120 ? 'на связи' : 'нет данных ' + ago(age)) +
                               ' · ' + fmtTime(m.ts);
+    $('status').textContent = age < 120 ? 'на связи' : 'нет связи';
+    $('c-status').classList.toggle('alert', age >= 120);
     $('soil').textContent = m.soil_ok ? m.soil_pct : (m.soil_dry_d0 ? 'СУХО' : 'МОКРО');
     $('c-soil').classList.toggle('alert', m.soil_ok ? m.soil_pct < 30 : !!m.soil_dry_d0);
     $('temp').textContent = m.temp == null ? '--' : m.temp.toFixed(1);
@@ -194,6 +269,7 @@ async function loadState() {
                            (s.pending ? ` · ждёт полив ${s.pending.seconds} с` : '');
   } else {
     $('online').textContent = 'данных пока нет';
+    $('status').textContent = '--';
   }
   const w = s.events.find(e => e.type === 'water');
   $('watered').textContent = w ? ago(s.now - w.ts) : '--';
@@ -202,8 +278,8 @@ async function loadState() {
     $('wet').value = s.calibration.wet_raw;
   }
   $('events').innerHTML = s.events.map(e =>
-    `<tr><td>${fmtTime(e.ts)}</td><td>${e.type}</td><td>${e.value ?? ''}</td>` +
-    `<td>${NOTES[e.note] || e.note || ''}</td></tr>`).join('');
+    `<tr><td>${fmtTime(e.ts)}</td><td>${esc(e.type)}</td><td>${esc(e.value)}</td>` +
+    `<td>${esc(NOTES[e.note] || e.note)}</td></tr>`).join('');
 }
 
 function untilText(h) {
@@ -233,50 +309,197 @@ function showForecast(fc) {
   $('fc-note').textContent = note;
 }
 
-async function loadChart() {
-  const hours = +$('hours').value;
-  const q = `device=${encodeURIComponent(dev())}`;
-  const [rows0, fc] = await Promise.all([api(`web/api/history?${q}&hours=${hours}`),
-                                         api(`web/api/forecast?${q}`).catch(() => ({}))]);
-  const rows = rows0.filter(r => r.soil_ok);
-  showForecast(fc);
-  const traj = fc.status === 'ok' ? fc.trajectory : [];
+function drawChart(rows, marks, fc, hours, low, high) {
+  const traj = fc && fc.status === 'ok' ? fc.trajectory : [];
   const svg = $('chart'), W = 900, H = 220, P = 24;
-  const now = Date.now() / 1000, t0 = now - hours * 3600;
-  const t1 = traj.length ? now + Math.min(24, hours / 3) * 3600 : now;
+  const now = Date.now() / 1000;
+  const first = rows.length ? rows[0].ts : now - hours * 3600;
+  const t0 = Math.max(now - hours * 3600, hours > 24 * 31 ? first : now - hours * 3600);
+  const span = now - t0;
+  const t1 = traj.length ? now + Math.min(24 * 3600, span / 3) : now;
   const x = t => P + (t - t0) / (t1 - t0) * (W - 2 * P);
   const y = v => H - P - v / 100 * (H - 2 * P);
-  let g = '';
-  for (const v of [0, 30, 50, 100]) {
-    g += `<line x1="${P}" x2="${W - P}" y1="${y(v)}" y2="${y(v)}" stroke="${v === 30 ? '#c44' : '#ddd'}"
-           stroke-dasharray="${v === 30 ? '4 4' : ''}"/><text x="2" y="${y(v) + 4}" font-size="11"
-           fill="#696964">${v}</text>`;
+  let g = `<rect x="${P}" width="${W - 2 * P}" y="${y(high)}" height="${y(low) - y(high)}"
+            fill="#2f7d4f10"/>`;
+  for (const v of [0, 50, 100]) {
+    g += `<line x1="${P}" x2="${W - P}" y1="${y(v)}" y2="${y(v)}" stroke="#ddd"/>
+          <text x="2" y="${y(v) + 4}" font-size="11" fill="#696964">${v}</text>`;
+  }
+  for (const [v, label] of [[low, 'порог'], [high, '']]) {
+    g += `<line x1="${P}" x2="${W - P}" y1="${y(v)}" y2="${y(v)}" stroke="#c44" stroke-dasharray="4 4"
+           vector-effect="non-scaling-stroke"/><text x="2" y="${y(v) + 4}" font-size="11"
+           fill="#c44">${Math.round(v)}</text>` + (label ? `<text x="${W - P - 34}" y="${y(v) - 4}"
+           font-size="11" fill="#c44">${label}</text>` : '');
   }
   if (rows.length > 1) {
-    const pts = rows.map(r => `${x(r.ts).toFixed(1)},${y(r.soil_pct).toFixed(1)}`).join(' ');
+    const pts = rows.filter(r => r.ts >= t0).map(r =>
+      `${x(r.ts).toFixed(1)},${y(r.soil_pct).toFixed(1)}`).join(' ');
     g += `<polyline points="${pts}" fill="none" stroke="#121212" stroke-width="2"
            vector-effect="non-scaling-stroke"/>`;
   } else {
     g += `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="#696964">Нет данных</text>`;
+  }
+  for (const m of marks.filter(m => m.ts >= t0)) {
+    const why = `Полив ${fmtTime(m.ts)}${m.value ? ', ' + m.value + ' с' : ''}: ` +
+                (NOTES[m.note] || m.note || 'причина не указана');
+    g += `<g><title>${esc(why)}</title><line x1="${x(m.ts)}" x2="${x(m.ts)}" y1="${P - 14}"
+           y2="${H - P}" stroke="#2f7d4f" stroke-width="1" stroke-dasharray="2 3"
+           vector-effect="non-scaling-stroke"/><rect x="${x(m.ts) - 5}" y="${P - 18}" width="10"
+           height="10" fill="#2f7d4f"/></g>`;
   }
   if (traj.length) {
     const tt = p => fc.now + p.h * 3600;
     const vis = traj.filter(p => tt(p) <= t1 + 1);
     const band = vis.map(p => `${x(tt(p)).toFixed(1)},${y(p.hi).toFixed(1)}`).concat(
       vis.slice().reverse().map(p => `${x(tt(p)).toFixed(1)},${y(p.lo).toFixed(1)}`)).join(' ');
-    g += `<polygon points="${band}" fill="#12121214"/>`;
-    g += `<polyline points="${vis.map(p => `${x(tt(p)).toFixed(1)},${y(p.soil).toFixed(1)}`).join(' ')}"
-           fill="none" stroke="#121212" stroke-width="2" stroke-dasharray="6 4"
-           vector-effect="non-scaling-stroke"/>`;
+    g += `<g><title>Прогноз ИИ с интервалом 10–90 %</title><polygon points="${band}"
+           fill="#12121214"/><polyline points="${vis.map(p =>
+           `${x(tt(p)).toFixed(1)},${y(p.soil).toFixed(1)}`).join(' ')}" fill="none"
+           stroke="#121212" stroke-width="2" stroke-dasharray="6 4"
+           vector-effect="non-scaling-stroke"/></g>`;
     g += `<line x1="${x(now)}" x2="${x(now)}" y1="${P}" y2="${H - P}" stroke="#bbb"/>
           <text x="${x(now) + 4}" y="${P + 10}" font-size="11" fill="#696964">прогноз</text>`;
   }
   svg.innerHTML = g;
 }
 
+async function loadChart() {
+  const hours = +$('hours').value;
+  const q = `device=${encodeURIComponent(dev())}`;
+  const [rows0, fc, marks] = await Promise.all([
+    api(`web/api/history?${q}&hours=${hours}`), api(`web/api/forecast?${q}`).catch(() => ({})),
+    api(`web/api/waterings?${q}&hours=${hours}`).catch(() => [])]);
+  showForecast(fc);
+  drawChart(rows0.filter(r => r.soil_ok), marks, fc, hours,
+            calib && calib.target_low != null ? calib.target_low : 30,
+            calib && calib.target_high != null ? Math.min(calib.target_high, 70) : 70);
+}
+
+async function loadDemo() {
+  const name = $('device').value.slice(5), hours = +$('hours').value;
+  const d = await api(`web/api/demo?series=${encodeURIComponent(name)}&hours=${hours}`);
+  const last = d.history[d.history.length - 1];
+  $('soil').textContent = last ? Math.round(last.soil_pct) : '--';
+  $('c-soil').classList.toggle('alert', !!last && last.soil_pct < 30);
+  $('temp').textContent = last && last.temp != null ? last.temp.toFixed(1) : '--';
+  $('hum').textContent = last && last.air_hum != null ? Math.round(last.air_hum) : '--';
+  const w = d.waterings[d.waterings.length - 1];
+  $('watered').textContent = w ? ago(Date.now() / 1000 - w.ts) : '--';
+  $('status').textContent = 'датасет';
+  $('c-status').classList.remove('alert');
+  $('next').textContent = d.forecast ? untilText(d.forecast.hours_to_threshold) : '--';
+  $('online').textContent = '';
+  $('raw').textContent = '';
+  $('source-note').hidden = false;
+  $('source-note').textContent = `Открытый датасет «${d.series}» (${d.source}), данные ` +
+    `${d.period[0]} … ${d.period[1]}, время сдвинуто так, что ряд заканчивается сейчас; ` +
+    'влажность нормализована. Прогноз — рабочая модель без адаптации.';
+  $('fc-note').textContent = '';
+  drawChart(d.history, d.waterings, d.forecast, hours, 30, 70);
+}
+
+// ----- карточка модели, сравнение политик (W1, M2) -----
+function bars(svgId, items) {
+  const W = 400, H = 150, P = 28, max = Math.max(...items.map(i => i.v || 0), 1);
+  const bw = (W - 2 * P) / items.length;
+  let g = '';
+  items.forEach((it, i) => {
+    const h = (it.v || 0) / max * (H - 2 * P), x0 = P + i * bw + bw * 0.15;
+    g += `<rect x="${x0}" y="${H - P - h}" width="${bw * 0.7}" height="${h}"
+           fill="${i === 0 ? '#121212' : '#bdbdb5'}"/>
+          <text x="${x0 + bw * 0.35}" y="${H - P - h - 4}" font-size="12" text-anchor="middle"
+           fill="#121212">${it.v == null ? '—' : Math.round(it.v)}</text>
+          <text x="${x0 + bw * 0.35}" y="${H - 8}" font-size="11" text-anchor="middle"
+           fill="#696964">${esc(it.label)}</text>`;
+  });
+  $(svgId).innerHTML = g;
+}
+
+function curve(svgId, points) {
+  const W = 400, H = 150, P = 28;
+  const vals = points.map(p => p.ttt_mae_h).filter(v => v != null);
+  if (!vals.length) { $(svgId).innerHTML = ''; return; }
+  const max = Math.max(...vals) * 1.15, n = points.length - 1 || 1;
+  const x = i => P + i / n * (W - 2 * P), y = v => H - P - v / max * (H - 2 * P);
+  let g = `<line x1="${P}" x2="${W - P}" y1="${H - P}" y2="${H - P}" stroke="#ddd"/>`;
+  g += `<polyline points="${points.map((p, i) => `${x(i)},${y(p.ttt_mae_h)}`).join(' ')}"
+         fill="none" stroke="#121212" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  points.forEach((p, i) => {
+    g += `<circle cx="${x(i)}" cy="${y(p.ttt_mae_h)}" r="3" fill="#121212"/>
+          <text x="${x(i)}" y="${y(p.ttt_mae_h) - 6}" font-size="11" text-anchor="middle">${
+          Math.round(p.ttt_mae_h)}</text>
+          <text x="${x(i)}" y="${H - 8}" font-size="11" text-anchor="middle" fill="#696964">${
+          p.cycles}</text>`;
+  });
+  $(svgId).innerHTML = g;
+}
+
+const pct = v => v == null ? '—' : (v * 100).toFixed(1) + ' %';
+const n1 = v => v == null ? '—' : (+v).toFixed(1);
+
+async function loadModel() {
+  const card = await api('web/api/model');
+  const c = card.champion;
+  if (c) {
+    const t = c.trained_on, m = c.metrics, b = m.baselines || {};
+    $('model-note').textContent = `Версия ${c.version} (${m.kind === 'gbr' ? 'градиентный бустинг' :
+      'гребневая регрессия'}), обучена на ${t.series.length} рядах из открытых датасетов (` +
+      `${t.sources.join(', ')})` + (t.own_cycles ? ` и ${t.own_cycles} циклах своего растения` :
+      '; своих данных в обучении пока нет') + `. Время до порога точнее линейного прогноза на ` +
+      `${Math.round((m.gain_ttt_vs_linear || 0) * 100)} %.`;
+    bars('model-bars', [{ label:'модель', v:m.ttt_mae_h },
+                        { label:'линейная 6 ч', v:b.linear_ttt_mae_h },
+                        { label:'средняя скорость', v:b.mean_rate_ttt_mae_h }]);
+    curve('adapt-curve', (m.adaptation && m.adaptation._mean) || []);
+    const rows = [
+      ['Время до порога: MAE, ч', m.ttt_mae_h, null, b.linear_ttt_mae_h, b.mean_rate_ttt_mae_h],
+      ['Время до порога: медиана, ч', m.ttt_median_h, null, b.linear_ttt_median_h,
+       b.mean_rate_ttt_median_h],
+      ['Влажность через 6 ч: MAE, п. п.', m.mae_6h, b.persistence_mae_6h, b.linear_mae_6h, null],
+      ['Влажность через 24 ч: MAE, п. п.', m.mae_24h, b.persistence_mae_24h, b.linear_mae_24h, null],
+    ];
+    $('model-table').innerHTML = rows.map(r => `<tr><td>${r[0]}</td>` + r.slice(1).map((v, i) =>
+      `<td class="num"${i === 0 ? ' style="font-weight:700"' : ''}>${n1(v)}</td>`).join('') +
+      '</tr>').join('');
+    const mon = card.monitoring;
+    $('model-monitor').textContent = mon.checked
+      ? `На своём растении за ${mon.days} дней проверено ${mon.checked} прогнозов: ` +
+        `фактическая ошибка ≈ ${mon.ttt_mae_h} ч.`
+      : `Фактическая ошибка на своём растении появится, когда почва дойдёт до порога ` +
+        `(ожидают проверки: ${mon.pending}).`;
+  }
+  $('model-history').innerHTML = card.history.map(h => `<tr><td>${esc(h.version)}</td>` +
+    `<td>${h.is_champion ? 'да' : ''}</td><td class="num">${n1(h.ttt_mae_h)}</td>` +
+    `<td class="num">${n1(h.mae_6h)}</td><td>${esc(h.sources.join(', '))}` +
+    `${h.own_cycles ? ' + ' + h.own_cycles + ' своих циклов' : ''}</td></tr>`).join('');
+  const p = card.policy_sim;
+  if (p) {
+    const a = p.threshold, m = p.ml;
+    const rows = [['Время в диапазоне 30–70 %', pct(a.in_range_share), pct(m.in_range_share)],
+                  ['Часы пересыхания (< 30 %)', n1(a.hours_dry), n1(m.hours_dry)],
+                  ['Часы перелива (> 70 %)', n1(a.hours_wet), n1(m.hours_wet)],
+                  ['Средняя влажность, %', n1(a.mean_soil), n1(m.mean_soil)],
+                  ['Число поливов', a.waterings, m.waterings],
+                  ['Работа насоса, с (≈ расход воды)', n1(a.pump_seconds), n1(m.pump_seconds)],
+                  ['Суток в симуляции', n1(a.days), n1(m.days)]];
+    $('policy-table').innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td class="num">${r[1]}</td>` +
+      `<td class="num">${r[2]}</td></tr>`).join('');
+  } else {
+    $('policy-table').innerHTML = '<tr><td colspan="3" class="muted">Появится после обучения ' +
+      'модели на открытых датасетах.</td></tr>';
+  }
+}
+
 async function refresh() {
-  try { await loadState(); await loadChart(); await loadCalibration(); }
-  catch (e) { say('Ошибка: ' + e.message); }
+  try {
+    document.body.classList.toggle('demo', isDemo());
+    if (isDemo()) { await loadDemo(); }
+    else {
+      $('source-note').hidden = true;
+      await loadCalibration(); await loadState(); await loadChart(); await loadDecisions();
+    }
+    await loadModel();
+  } catch (e) { say('Ошибка: ' + e.message); }
 }
 
 $('water').onclick = async () => {
@@ -409,12 +632,37 @@ $('talk').onclick = async () => {
   $('voice-msg').textContent = 'Слушаю… (до 8 с)';
 };
 
+// ----- режим полива и журнал решений (D0) -----
+const ACTIONS = { water:'полив', blocked:'не поливать', mode:'режим' };
+async function loadDecisions() {
+  const q = 'device=' + encodeURIComponent(dev());
+  const [m, list] = await Promise.all([api('web/api/mode?' + q), api('web/api/decisions?' + q)]);
+  if (document.activeElement !== $('mode')) $('mode').value = m.mode;
+  $('mode-msg').textContent = m.mode === 'ml' && !m.ml_available
+    ? 'Пока действует порог: ' + m.ml_reason : (m.active === 'ml'
+      ? 'Сервер поливает по прогнозу; без связи > 10 мин устройство вернётся к порогу.' : '');
+  $('decisions').innerHTML = '';
+  for (const d of list) {
+    const tr = document.createElement('tr');
+    for (const v of [fmtTime(d.ts), (ACTIONS[d.action] || d.action) +
+                     (d.action === 'water' ? ` ${d.seconds} с` : ''), d.reason]) {
+      const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
+    }
+    $('decisions').appendChild(tr);
+  }
+}
+$('mode').onchange = async () => {
+  try { await api('web/api/mode', { device: dev(), mode: $('mode').value }); await loadDecisions(); }
+  catch (e) { say('Режим: ' + e.message); }
+};
+
 // ----- калибровка под растение (C1) -----
 const CONF = { none:'нет', low:'низкая', medium:'средняя', high:'высокая' };
 let calProfilesShown = false;
 async function loadCalibration() {
   const s = await api('web/api/calibration/state?device=' + encodeURIComponent(dev()));
   const c = s.calibration, st = s.state, stage = c.stage || 0;
+  calib = c;
   if (!calProfilesShown) {
     $('cal-type').innerHTML = Object.entries(s.profiles).map(([k, p]) =>
       `<option value="${k}">${p.title} (${p.low}–${p.high} %)</option>`).join('');
@@ -468,10 +716,15 @@ $('device').onchange = () => {
   lastVoiceId = null; $('voice-log').innerHTML = '';
   refresh(); loadVoice().catch(() => {});
 };
-$('hours').onchange = loadChart;
+$('hours').onchange = refresh;
 
-loadDevices().then(() => { refresh(); loadVoice().catch(() => {}); });
-setInterval(refresh, 15000);
+loadDevices().then(() => {
+  // ?source=demo:soil_monitor — сразу открыть нужный источник (для записи экрана)
+  const src = new URLSearchParams(location.search).get('source');
+  if (src && [...$('device').options].some(o => o.value === src)) $('device').value = src;
+  refresh(); loadVoice().catch(() => {});
+});
+setInterval(refresh, PRESENT ? 10000 : 15000);
 setInterval(() => loadVoice().catch(() => {}), 3000);
 </script>
 </body>
