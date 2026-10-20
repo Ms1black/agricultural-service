@@ -80,7 +80,12 @@ def answer_for(db: Database, llm, device: str, text: str, kind: str) -> str:
     if kind == "empty":
         return "Не расслышал. Повторите, пожалуйста."
     if kind == "water":
-        v = safety.request_water(db, device, VOICE_WATER_SECONDS, "voice")
+        m = store.latest_measurement(db, device)
+        seconds = None
+        if m and m["soil_ok"] and m["soil_pct"] is not None:
+            from ..calibration import dose_seconds
+            seconds = dose_seconds(db, device, m["soil_pct"])
+        v = safety.request_water(db, device, seconds or VOICE_WATER_SECONDS, "voice")
         return (f"Поливаю, {v.seconds} с." if v.ok else f"Не буду поливать: {v.reason}.")
     if llm is not None:
         try:

@@ -5,13 +5,14 @@
 """
 
 import json
+import logging
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 
-from . import store
+from . import calibration, store
 from .auth import require_device
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_device)])
@@ -47,7 +48,16 @@ def compact_json(data: dict) -> Response:
 def telemetry(t: Telemetry, request: Request) -> Response:
     db = request.app.state.db
     settings = request.app.state.settings
-    store.save_measurement(db, t.model_dump())
+    m = t.model_dump()
+    cal = store.get_calibration(db, t.device)
+    if cal and m["soil_ok"] and m["soil_raw"] is not None:
+        # Проценты считает сервер по своей калибровке (C1) — та же формула, что в прошивке
+        m["soil_pct"] = calibration.percent(m["soil_raw"], cal["dry_raw"], cal["wet_raw"])
+    store.save_measurement(db, m)
+    try:
+        calibration.on_telemetry(db, t.device)
+    except Exception:  # калибровка не должна ломать приём телеметрии
+        logging.getLogger("calibration").exception("ошибка шага калибровки")
 
     resp: dict = {"command": "none"}
     cmd = store.take_command(db, t.device, settings.command_ttl_s)
@@ -57,6 +67,8 @@ def telemetry(t: Telemetry, request: Request) -> Response:
     if cal:
         resp["dry"] = cal["dry_raw"]
         resp["wet"] = cal["wet_raw"]
+        if 1 <= (cal.get("stage") or 0) <= 3:
+            resp["calib_stage"] = cal["stage"]       # F3: полоса Calibrating N/3
     return compact_json(resp)
 
 
