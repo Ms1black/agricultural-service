@@ -56,6 +56,7 @@
     <div class="cell"><div class="label">Температура, °C</div><div class="value" id="temp">--</div></div>
     <div class="cell"><div class="label">Влажность воздуха, %</div><div class="value" id="hum">--</div></div>
     <div class="cell"><div class="label">Последний полив</div><div class="value" id="watered">--</div></div>
+    <div class="cell"><div class="label">Следующий полив</div><div class="value" id="next">--</div></div>
   </div>
   <p class="muted" id="raw"></p>
 
@@ -67,6 +68,7 @@
     </select>
   </div>
   <svg id="chart" viewBox="0 0 900 220" preserveAspectRatio="none"></svg>
+  <p class="muted" id="fc-note"></p>
 
   <h2>Спросить ИИ о растении</h2>
   <div id="chat-log"></div>
@@ -164,13 +166,45 @@ async function loadState() {
     `<td>${NOTES[e.note] || e.note || ''}</td></tr>`).join('');
 }
 
+function untilText(h) {
+  if (h == null) return '--';
+  if (h <= 0) return 'сейчас';
+  if (h < 1) return '< 1 ч';
+  if (h < 48) return '≈ ' + Math.round(h) + ' ч';
+  if (h < 24 * 14) return '≈ ' + Math.round(h / 24) + ' дн';
+  return '> 2 нед';
+}
+
+function showForecast(fc) {
+  if (fc.status !== 'ok') {
+    $('next').textContent = '--';
+    $('fc-note').textContent = 'Прогноз: ' + (fc.note || 'нет данных');
+    return;
+  }
+  $('next').textContent = untilText(fc.next_water_ts ? fc.hours_to_threshold : null);
+  const m = fc.model, ad = fc.adaptation;
+  let note = m
+    ? `Прогноз — модель ${m.version}, обучена на открытых датасетах ` +
+      `(${m.trained_on.sources.join(', ')}); ошибка времени до порога ≈ ${m.metrics.ttt_mae_h} ч ` +
+      `против ${m.metrics.baselines.linear_ttt_mae_h} ч у линейного бейзлайна.`
+    : 'Прогноз — линейная экстраполяция (модель ещё не обучена).';
+  note += ad.own_cycles ? ` Адаптирована по ${ad.own_cycles} циклам этого растения (×${ad.scale}).`
+                        : ' Своих циклов для адаптации пока нет.';
+  $('fc-note').textContent = note;
+}
+
 async function loadChart() {
   const hours = +$('hours').value;
-  const rows = (await api(`web/api/history?device=${encodeURIComponent(dev())}&hours=${hours}`))
-    .filter(r => r.soil_ok);
+  const q = `device=${encodeURIComponent(dev())}`;
+  const [rows0, fc] = await Promise.all([api(`web/api/history?${q}&hours=${hours}`),
+                                         api(`web/api/forecast?${q}`).catch(() => ({}))]);
+  const rows = rows0.filter(r => r.soil_ok);
+  showForecast(fc);
+  const traj = fc.status === 'ok' ? fc.trajectory : [];
   const svg = $('chart'), W = 900, H = 220, P = 24;
   const now = Date.now() / 1000, t0 = now - hours * 3600;
-  const x = t => P + (t - t0) / (now - t0) * (W - 2 * P);
+  const t1 = traj.length ? now + Math.min(24, hours / 3) * 3600 : now;
+  const x = t => P + (t - t0) / (t1 - t0) * (W - 2 * P);
   const y = v => H - P - v / 100 * (H - 2 * P);
   let g = '';
   for (const v of [0, 30, 50, 100]) {
@@ -184,6 +218,18 @@ async function loadChart() {
            vector-effect="non-scaling-stroke"/>`;
   } else {
     g += `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="#696964">Нет данных</text>`;
+  }
+  if (traj.length) {
+    const tt = p => fc.now + p.h * 3600;
+    const vis = traj.filter(p => tt(p) <= t1 + 1);
+    const band = vis.map(p => `${x(tt(p)).toFixed(1)},${y(p.hi).toFixed(1)}`).concat(
+      vis.slice().reverse().map(p => `${x(tt(p)).toFixed(1)},${y(p.lo).toFixed(1)}`)).join(' ');
+    g += `<polygon points="${band}" fill="#12121214"/>`;
+    g += `<polyline points="${vis.map(p => `${x(tt(p)).toFixed(1)},${y(p.soil).toFixed(1)}`).join(' ')}"
+           fill="none" stroke="#121212" stroke-width="2" stroke-dasharray="6 4"
+           vector-effect="non-scaling-stroke"/>`;
+    g += `<line x1="${x(now)}" x2="${x(now)}" y1="${P}" y2="${H - P}" stroke="#bbb"/>
+          <text x="${x(now) + 4}" y="${P + 10}" font-size="11" fill="#696964">прогноз</text>`;
   }
   svg.innerHTML = g;
 }

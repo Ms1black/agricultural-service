@@ -72,8 +72,17 @@ def describe(db: Database, device: str, now: float | None = None) -> str:
             lines.append(f"- {ago(now - e['ts'])}, {_num(e['value'], ' с')}: {reason}")
     else:
         lines.append("Поливов в журнале пока нет.")
-    lines.append("Прогноза модели пока нет — используется полив по порогу.")
+    lines.append(forecast_line(db, device))
     return "\n".join(lines)
+
+
+def forecast_line(db: Database, device: str) -> str:
+    try:
+        from ..ml.forecast import describe as describe_forecast
+        from ..ml.forecast import forecast
+        return describe_forecast(forecast(db, device))
+    except Exception:  # прогноз не должен ломать чат
+        return "Прогноз сейчас недоступен — используется полив по порогу."
 
 
 def build_messages(db: Database, device: str, history: list[Message]) -> list[Message]:

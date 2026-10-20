@@ -59,6 +59,13 @@ def telemetry(t: Telemetry, request: Request) -> Response:
     return compact_json(resp)
 
 
+@router.get("/forecast")
+def forecast(request: Request, device: str = "plant1") -> dict:
+    """Прогноз высыхания (M1): время до порога, траектория на 24 ч, версия модели и метрики."""
+    from .ml.forecast import forecast as make_forecast
+    return make_forecast(request.app.state.db, device)
+
+
 @router.post("/event")
 def event(e: Event, request: Request) -> Response:
     store.save_event(request.app.state.db, e.device, e.type, e.value, e.note)

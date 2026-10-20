@@ -52,6 +52,19 @@ curl http://localhost:8000/health
 Без ключа сервис работает, чат показывает «ИИ недоступен». Другой провайдер (DeepSeek, YandexGPT) —
 `LLM_PROVIDER=openai` и переменные `OPENAI_*` из `.env.example`.
 
+## ML: прогноз высыхания
+
+Модель обучается на открытых датасетах ([datasets.md](datasets.md)), результаты — [ml_report.md](ml_report.md).
+
+```bash
+docker compose exec plant python -m app.ml.datasets download   # открытые данные → /data/external
+docker compose exec plant python -m app.ml train                # обучение, сравнение, реестр
+```
+
+Модель становится рабочей, только если лучше бейзлайнов и текущей рабочей (раздел 6.6 плана).
+Прогноз: `GET /web/api/forecast?device=plant1` (веб) и `GET /api/forecast` (устройство, токен).
+На своих циклах прогноз адаптируется автоматически. Без модели — линейная экстраполяция.
+
 ## Веб
 
 `http://<IP-сервера>:8000/` — логин `PLANT_WEB_USER` (по умолчанию `admin`) и `PLANT_WEB_PASSWORD`.
