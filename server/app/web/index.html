@@ -30,6 +30,15 @@
   table { width:100%; border-collapse:collapse; font-size:14px; }
   td, th { text-align:left; padding:4px 6px; border-bottom:1px solid var(--faint); }
   #msg { min-height:1.4em; }
+  #chat-log { border:1px solid var(--faint); border-radius:6px; background:#fff8; padding:8px 12px;
+              max-height:320px; overflow-y:auto; }
+  #chat-log:empty { display:none; }
+  .bubble { margin:6px 0; white-space:pre-wrap; }
+  .bubble.user { color:var(--muted); }
+  .bubble.user::before { content:'Вы: '; font-weight:700; }
+  .bubble.assistant::before { content:'Джарвис: '; font-weight:700; }
+  #chat-form { margin-top:8px; }
+  #chat-input { flex:1; min-width:180px; }
 </style>
 </head>
 <body>
@@ -58,6 +67,15 @@
     </select>
   </div>
   <svg id="chart" viewBox="0 0 900 220" preserveAspectRatio="none"></svg>
+
+  <h2>Спросить ИИ о растении</h2>
+  <div id="chat-log"></div>
+  <form id="chat-form" class="row">
+    <input id="chat-input" placeholder="Например: как там мой цветок?" maxlength="500" autocomplete="off">
+    <button id="chat-send">Спросить</button>
+    <button type="button" class="ghost" id="why">Почему полили?</button>
+  </form>
+  <p id="chat-msg" class="muted"></p>
 
   <h2>Полив</h2>
   <div class="row">
@@ -191,7 +209,41 @@ async function calibrate(body) {
 $('cal-save').onclick = () => calibrate({ dry_raw: +$('dry').value, wet_raw: +$('wet').value });
 $('cal-dry').onclick = () => calibrate({ use_current: 'dry' });
 $('cal-wet').onclick = () => calibrate({ use_current: 'wet' });
-$('device').onchange = refresh;
+const chat = [];
+function addBubble(role, text) {
+  const div = document.createElement('div');
+  div.className = 'bubble ' + role;
+  div.textContent = text;
+  $('chat-log').appendChild(div);
+  $('chat-log').scrollTop = $('chat-log').scrollHeight;
+}
+async function askAI(path, body, question) {
+  $('chat-send').disabled = $('why').disabled = true;
+  $('chat-msg').textContent = 'Думаю…';
+  addBubble('user', question);
+  try {
+    const r = await api(path, body);
+    addBubble('assistant', r.answer);
+    if (path === 'web/api/chat') chat.push({ role: 'assistant', content: r.answer });
+    $('chat-msg').textContent = '';
+  } catch (e) {
+    if (path === 'web/api/chat') { chat.pop(); $('chat-input').value = question; }
+    $('chat-log').lastChild.remove();
+    $('chat-msg').textContent = e.message;
+  } finally {
+    $('chat-send').disabled = $('why').disabled = false;
+  }
+}
+$('chat-form').onsubmit = ev => {
+  ev.preventDefault();
+  const text = $('chat-input').value.trim();
+  if (!text) return;
+  $('chat-input').value = '';
+  chat.push({ role: 'user', content: text });
+  askAI('web/api/chat', { device: dev(), messages: chat }, text);
+};
+$('why').onclick = () => askAI('web/api/why', { device: dev() }, 'Почему полили?');
+$('device').onchange = () => { chat.length = 0; $('chat-log').innerHTML = ''; refresh(); };
 $('hours').onchange = loadChart;
 
 loadDevices().then(refresh);

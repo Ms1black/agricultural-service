@@ -39,6 +39,19 @@ curl http://localhost:8000/health
 `secrets.h` (копия `secrets.example.h`) необязателен: его значения используются, только пока
 в памяти устройства ничего не сохранено.
 
+## ИИ: чат и «Почему полили?» (GigaChat)
+
+1. Ключ: [developers.sber.ru](https://developers.sber.ru/studio) → проект GigaChat API (Freemium для
+   физлиц) → «Ключ авторизации». Он уже в base64 — копировать как есть.
+2. В `server/.env`: `LLM_PROVIDER=gigachat`, `GIGACHAT_AUTH_KEY=<ключ>`. Ключ не коммитить и не пересылать.
+3. `git pull && docker compose up -d --build` — пересборка с новым кодом и `.env`.
+4. Проверка: `docker compose exec plant python -m app.llm "Привет"` → ответ модели;
+   `curl http://localhost:8000/health` → `"llm":"gigachat"`.
+
+Сертификат НУЦ Минцифры (им подписан GigaChat) лежит в `server/certs/` и уже есть в образе.
+Без ключа сервис работает, чат показывает «ИИ недоступен». Другой провайдер (DeepSeek, YandexGPT) —
+`LLM_PROVIDER=openai` и переменные `OPENAI_*` из `.env.example`.
+
 ## Веб
 
 `http://<IP-сервера>:8000/` — логин `PLANT_WEB_USER` (по умолчанию `admin`) и `PLANT_WEB_PASSWORD`.
