@@ -25,7 +25,7 @@
 | Агент | Зона | Задачи |
 |---|---|---|
 | **firmware** | `firmware/` | F1, F2, F3, V2, часть V3, D1 |
-| **server** | `server/app/{api,db,decision,voice,llm,web}` | S1, L1, V1, V1b, W1, D0, часть V3, D1 |
+| **server** | `server/app/{api,db,decision,voice,llm,web}` | S1, C1, L1, V1, V1b, W1, D0, часть V3, D1 |
 | **ml** | `server/app/ml`, `ml/` | M0, M1, M2 |
 
 Изменения контрактов (раздел 4) — только через правку этого файла в том же PR.
