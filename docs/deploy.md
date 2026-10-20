@@ -65,6 +65,22 @@ docker compose exec plant python -m app.ml train                # обучени
 Прогноз: `GET /web/api/forecast?device=plant1` (веб) и `GET /api/forecast` (устройство, токен).
 На своих циклах прогноз адаптируется автоматически. Без модели — линейная экстраполяция.
 
+## Голос «Джарвис»
+
+Распознавание (faster-whisper) и синтез (Silero, голос `aidar`) — на сервере, на CPU.
+Первый старт скачивает модели (~0.5 ГБ) в `/data/models/voice`; с `VOICE_PRELOAD=1` это
+происходит сразу после запуска (`docker compose logs -f` → «модели голоса загружены»).
+
+- Устройство: `POST /api/voice` (контракт 4.3) — после задачи V2.
+- Без устройства: `python scripts/voice_test.py phrase.wav --server http://<IP>:8000 --token <PLANT_TOKEN>`
+  (WAV 16 бит, моно, 16 кГц) → распознанная фраза, ответ и `answer.wav`.
+- Дашборд, блок «Голосовой помощник»: «Включить звук» — ответы на фразы устройства звучат
+  из ноутбука; «Говорить» — фраза с микрофона браузера (браузер даёт микрофон только на
+  `localhost` или по HTTPS; для записи демо — запустить сервис локально, см. ниже).
+- «Джарвис, полей» проходит слой безопасности: не чаще раза в 30 мин, не больше 6 в сутки,
+  не при влажности > 70 %, только при свежих данных.
+- Без ключа LLM на вопросы о растении отвечает шаблон по данным датчиков и прогнозу.
+
 ## Веб
 
 `http://<IP-сервера>:8000/` — логин `PLANT_WEB_USER` (по умолчанию `admin`) и `PLANT_WEB_PASSWORD`.
@@ -97,3 +113,12 @@ pip install -r requirements-dev.txt
 PLANT_INSECURE=1 PLANT_DB=./data/plant.db uvicorn app.main:create_app --factory --reload
 pytest && ruff check .
 ```
+
+Голос локально — дополнительно:
+
+```bash
+pip install --index-url https://download.pytorch.org/whl/cpu torch==2.8.0
+pip install -r requirements-voice.txt
+```
+
+Без них сервис работает, голос отвечает «голос недоступен».

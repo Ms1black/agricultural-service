@@ -69,9 +69,22 @@ def take_command(db: Database, device: str, ttl_s: float) -> dict | None:
         if not row:
             return None
         c.execute("DELETE FROM pending_commands WHERE device = ?", (device,))
+        if time.time() - row["created"] <= ttl_s:
+            c.execute("INSERT OR REPLACE INTO taken_commands (device, note, seconds, taken) "
+                      "VALUES (?, ?, ?, ?)", (device, row["note"], row["seconds"], time.time()))
     if time.time() - row["created"] > ttl_s:
         return None
     return dict(row)
+
+
+def command_reason(db: Database, device: str, within_s: float = 120) -> str | None:
+    """Причина команды полива, недавно отданной устройству (voice, ml, web…)."""
+    with db.conn() as c:
+        row = c.execute("SELECT note, taken FROM taken_commands WHERE device = ?",
+                        (device,)).fetchone()
+    if row and time.time() - row["taken"] <= within_s:
+        return row["note"]
+    return None
 
 
 def latest_measurement(db: Database, device: str) -> dict | None:

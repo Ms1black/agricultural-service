@@ -5,8 +5,9 @@
 """
 
 import json
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 
@@ -66,7 +67,37 @@ def forecast(request: Request, device: str = "plant1") -> dict:
     return make_forecast(request.app.state.db, device)
 
 
+@router.post("/voice")
+async def voice(request: Request, x_device: str = Header(default="plant1")) -> Response:
+    """Контракт 4.3: PCM 16 бит / 16 кГц → PCM ответа + X-Transcript, X-Answer, X-Answer-Id."""
+    from starlette.concurrency import run_in_threadpool
+
+    from . import voice as v
+    from .voice.audio import MAX_PHRASE_S, RATE, pcm16_to_float
+    st = request.app.state
+    if st.stt is None:
+        raise HTTPException(503, "голос выключен")
+    body = await request.body()
+    if len(body) > MAX_PHRASE_S * RATE * 2:
+        raise HTTPException(413, "фраза длиннее 8 с")
+    if len(body) < RATE // 5 * 2:
+        raise HTTPException(400, "пустая фраза")
+    try:
+        r = await run_in_threadpool(v.handle, st.db, st.llm, st.stt, st.tts,
+                                    st.settings.voice_path, x_device, pcm16_to_float(body))
+    except v.engines.VoiceUnavailable as e:
+        raise HTTPException(503, f"голос недоступен: {e}") from e
+    return Response(content=r.pcm, media_type="audio/L16; rate=16000; channels=1", headers={
+        "X-Transcript": quote(r.transcript), "X-Answer": quote(r.answer),
+        "X-Answer-Id": str(r.id)})
+
+
 @router.post("/event")
 def event(e: Event, request: Request) -> Response:
-    store.save_event(request.app.state.db, e.device, e.type, e.value, e.note)
+    db = request.app.state.db
+    note = e.note
+    if e.type == "water" and note == "web":
+        # Прошивка не знает, кто попросил полив: берём причину отданной ей команды
+        note = store.command_reason(db, e.device) or note
+    store.save_event(db, e.device, e.type, e.value, note)
     return compact_json({"ok": True})

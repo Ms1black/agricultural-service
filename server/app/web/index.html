@@ -38,6 +38,10 @@
   .bubble.user::before { content:'Вы: '; font-weight:700; }
   .bubble.assistant::before { content:'Джарвис: '; font-weight:700; }
   #chat-form { margin-top:8px; }
+  #voice-log .item { border-bottom:1px solid var(--faint); padding:6px 0; }
+  #voice-log .meta { color:var(--muted); font-size:12px; }
+  button.on { background:var(--accent); border-color:var(--accent); }
+  button.rec { background:#c44; border-color:#c44; }
   #chat-input { flex:1; min-width:180px; }
 </style>
 </head>
@@ -78,6 +82,15 @@
     <button type="button" class="ghost" id="why">Почему полили?</button>
   </form>
   <p id="chat-msg" class="muted"></p>
+
+  <h2>Голосовой помощник «Джарвис»</h2>
+  <div class="row">
+    <button id="sound" class="ghost">Включить звук</button>
+    <button id="talk">Говорить</button>
+    <span id="voice-msg" class="muted"></span>
+  </div>
+  <p class="muted">Ответы на фразы, сказанные устройству, звучат здесь, если звук включён.</p>
+  <div id="voice-log"></div>
 
   <h2>Полив</h2>
   <div class="row">
@@ -289,11 +302,95 @@ $('chat-form').onsubmit = ev => {
   askAI('web/api/chat', { device: dev(), messages: chat }, text);
 };
 $('why').onclick = () => askAI('web/api/why', { device: dev() }, 'Почему полили?');
-$('device').onchange = () => { chat.length = 0; $('chat-log').innerHTML = ''; refresh(); };
+// ----- голос (V1b): журнал, автовоспроизведение, микрофон браузера -----
+let soundOn = false, lastVoiceId = null, recorder = null;
+const playedHere = new Set(), player = new Audio();
+const INTENTS = { water:'полив', status:'о растении', chat:'разговор', empty:'не расслышал' };
+
+function play(id) { player.src = `web/api/voice/${id}.wav`; player.play().catch(() => {}); }
+
+function voiceItem(v) {
+  const div = document.createElement('div');
+  div.className = 'item';
+  const total = (v.ms_stt || 0) + (v.ms_llm || 0) + (v.ms_tts || 0);
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = `${fmtTime(v.ts)} · ${INTENTS[v.intent] || v.intent} · ответ за ` +
+                     `${(total / 1000).toFixed(1)} с (речь ${(v.ms_stt / 1000).toFixed(1)}, ` +
+                     `ИИ ${(v.ms_llm / 1000).toFixed(1)}, синтез ${(v.ms_tts / 1000).toFixed(1)})`;
+  const q = document.createElement('div'); q.className = 'bubble user'; q.textContent = v.transcript;
+  const a = document.createElement('div'); a.className = 'bubble assistant'; a.textContent = v.answer;
+  const again = document.createElement('button');
+  again.className = 'ghost'; again.textContent = 'Повторить'; again.onclick = () => play(v.id);
+  div.append(meta, q, a, again);
+  return div;
+}
+
+async function loadVoice() {
+  const first = lastVoiceId === null;
+  const r = await api(`web/api/voice/log?device=${encodeURIComponent(dev())}&after=${lastVoiceId || 0}`);
+  if (!r.enabled) { $('voice-msg').textContent = 'Голос выключен на сервере.'; return; }
+  const items = r.items.slice().reverse();            // от старых к новым
+  for (const v of items) {
+    $('voice-log').prepend(voiceItem(v));
+    if (!first && soundOn && !playedHere.has(v.id)) play(v.id);
+  }
+  if (items.length) lastVoiceId = items[items.length - 1].id;
+  else if (first) lastVoiceId = 0;
+  while ($('voice-log').children.length > 20) $('voice-log').lastChild.remove();
+}
+
+$('sound').onclick = () => {
+  soundOn = !soundOn;
+  $('sound').classList.toggle('on', soundOn);
+  $('sound').textContent = soundOn ? 'Звук включён' : 'Включить звук';
+  if (soundOn) { player.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='; player.play().catch(() => {}); }
+};
+
+$('talk').onclick = async () => {
+  if (recorder) { recorder.stop(); return; }
+  if (!window.isSecureContext || !navigator.mediaDevices) {
+    $('voice-msg').textContent = 'Микрофон браузера работает только на localhost или по HTTPS.';
+    return;
+  }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { $('voice-msg').textContent = 'Нет доступа к микрофону.'; return; }
+  const chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = e => chunks.push(e.data);
+  recorder.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+    recorder = null; clearTimeout(limit);
+    $('talk').classList.remove('rec'); $('talk').textContent = 'Говорить';
+    $('voice-msg').textContent = 'Думаю…';
+    try {
+      const resp = await fetch(`web/api/voice?device=${encodeURIComponent(dev())}`,
+                               { method: 'POST', body: new Blob(chunks) });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || resp.status);
+      playedHere.add(data.id);
+      play(data.id);
+      $('voice-msg').textContent = '';
+      loadVoice();
+    } catch (e) { $('voice-msg').textContent = 'Ошибка: ' + e.message; }
+  };
+  recorder.start();
+  const limit = setTimeout(() => recorder && recorder.stop(), 8000);   // фраза ≤ 8 с
+  $('talk').classList.add('rec'); $('talk').textContent = 'Стоп';
+  $('voice-msg').textContent = 'Слушаю… (до 8 с)';
+};
+
+$('device').onchange = () => {
+  chat.length = 0; $('chat-log').innerHTML = '';
+  lastVoiceId = null; $('voice-log').innerHTML = '';
+  refresh(); loadVoice().catch(() => {});
+};
 $('hours').onchange = loadChart;
 
-loadDevices().then(refresh);
+loadDevices().then(() => { refresh(); loadVoice().catch(() => {}); });
 setInterval(refresh, 15000);
+setInterval(() => loadVoice().catch(() => {}), 3000);
 </script>
 </body>
 </html>

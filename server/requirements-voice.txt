@@ -1,0 +1,2 @@
+# Голос (V1): ставится в Docker-образ отдельно, torch — CPU-сборка (см. Dockerfile)
+faster-whisper==1.2.0
