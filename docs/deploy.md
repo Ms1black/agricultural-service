@@ -83,6 +83,9 @@ docker compose exec plant python -m app.ml train                # обучени
 
 ## Веб
 
+Запись экрана для демо: `http://<IP>:8000/?present=1` (крупно, без кнопок, автообновление);
+открытый датасет как источник: `?present=1&source=demo:soil_monitor`.
+
 `http://<IP-сервера>:8000/` — логин `PLANT_WEB_USER` (по умолчанию `admin`) и `PLANT_WEB_PASSWORD`.
 Соединение без HTTPS: пароль и токен не использовать в других местах.
 

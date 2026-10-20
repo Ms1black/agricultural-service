@@ -281,3 +281,31 @@ def test_model_card_endpoint(app, web, tmp_path):
     card = web.get("/web/api/model").json()
     assert card["champion"]["metrics"]["ttt_mae_h"] is not None
     assert card["history"][0]["is_champion"] and card["monitoring"]["checked"] == 0
+
+
+# ----- дашборд (W1): открытый датасет как источник, отметки поливов -----
+
+def test_demo_source_endpoints(app, web, tmp_path, monkeypatch):
+    from app.ml import demo
+    folder = tmp_path / "thingspeak_soil_monitor"
+    folder.mkdir()
+    df = sawtooth(rate=1.0, days=10)
+    raw = (3000 - df["soil_pct"] * 20).round().astype(int)
+    lines = ["created_at,entry_id,field1,field2,field3,field4"] + [
+        f"{t:%Y-%m-%d %H:%M:%S} UTC,{i},{r},72,29.8,50" for i, (t, r) in
+        enumerate(zip(df["ts"], raw, strict=False))]
+    (folder / "feed.csv").write_text("\n".join(lines), encoding="utf-8")
+    monkeypatch.setenv("PLANT_EXTERNAL_DIR", str(tmp_path))
+    demo._cache.clear()
+    assert web.get("/web/api/demo/series").json() == ["soil_monitor"]
+    d = web.get("/web/api/demo?series=soil_monitor&hours=48").json()
+    assert abs(d["history"][-1]["ts"] - time.time()) < 60                 # конец ряда = сейчас
+    assert d["history"][-1]["temp"] == pytest.approx((72 - 32) * 5 / 9, abs=0.1)
+    assert d["waterings"] and d["forecast"] is None                       # модели ещё нет
+    assert web.get("/web/api/demo?series=nope").status_code == 404
+
+
+def test_waterings_endpoint(app, device, web):
+    device.post("/api/event", json={"device": "plant1", "type": "water", "value": 3,
+                                    "note": "claps"})
+    assert web.get("/web/api/waterings?hours=1").json()[0]["note"] == "claps"
