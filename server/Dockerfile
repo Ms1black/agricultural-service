@@ -1,11 +1,13 @@
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PLANT_DB=/data/plant.db
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PLANT_DB=/data/plant.db \
+    GIGACHAT_CA_BUNDLE=/srv/certs/russian_trusted_root_ca.pem
 WORKDIR /srv
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY certs ./certs
 COPY app ./app
 
 VOLUME /data

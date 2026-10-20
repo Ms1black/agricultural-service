@@ -1,4 +1,4 @@
-"""Веб-интерфейс: дашборд, ручной полив, калибровка, выгрузка CSV. Всё под HTTP Basic."""
+"""Веб-интерфейс: дашборд, ручной полив, калибровка, чат с ИИ, выгрузка CSV. Всё под HTTP Basic."""
 
 import csv
 import io
@@ -11,6 +11,8 @@ from pydantic import BaseModel
 
 from .. import store
 from ..auth import require_web
+from ..llm import LLMError
+from ..llm.context import build_messages
 
 router = APIRouter(dependencies=[Depends(require_web)])
 
@@ -33,6 +35,35 @@ class CalibrationRequest(BaseModel):
     wet_raw: int | None = None
     # "dry" / "wet" — взять текущее сырое значение датчика
     use_current: str | None = None
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    device: str = "plant1"
+    messages: list[ChatMessage]
+
+
+class WhyRequest(BaseModel):
+    device: str = "plant1"
+
+
+WHY_QUESTION = ("Почему растение полили в последний раз? Объясни по журналу поливов: когда, "
+                "сколько секунд и по какой причине. Если поливов не было — скажи об этом.")
+
+
+def ask_llm(request: Request, device: str, history: list[dict]) -> dict:
+    llm = request.app.state.llm
+    if llm is None:
+        raise HTTPException(503, "ИИ недоступен: не настроен ключ LLM")
+    try:
+        answer = llm.chat(build_messages(request.app.state.db, device, history))
+    except LLMError as e:
+        raise HTTPException(503, f"ИИ недоступен: {e}") from e
+    return {"answer": answer, "provider": llm.name}
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -89,6 +120,18 @@ def calibration(req: CalibrationRequest, request: Request) -> dict:
         raise HTTPException(400, "нужно 0 ≤ мокро < сухо ≤ 4095")
     store.set_calibration(db, req.device, dry, wet)
     return {"dry_raw": dry, "wet_raw": wet}
+
+
+@router.post("/web/api/chat")
+def chat(req: ChatRequest, request: Request) -> dict:
+    if not req.messages or req.messages[-1].role != "user":
+        raise HTTPException(400, "последнее сообщение — от пользователя")
+    return ask_llm(request, req.device, [m.model_dump() for m in req.messages])
+
+
+@router.post("/web/api/why")
+def why(req: WhyRequest, request: Request) -> dict:
+    return ask_llm(request, req.device, [{"role": "user", "content": WHY_QUESTION}])
 
 
 @router.get("/web/api/export.csv")
