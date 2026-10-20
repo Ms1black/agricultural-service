@@ -20,7 +20,7 @@ jobs:
             ~/.cache/pip
           key: pio-${{ hashFiles('firmware/platformio.ini') }}
       - run: pip install platformio
-      # secrets.h нет в репозитории — прошивка собирается с secrets.example.h
+      # secrets.h нет в репозитории — прошивка собирается с пустыми настройками (режим настройки)
       - run: pio run
         working-directory: firmware
 

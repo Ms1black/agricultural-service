@@ -8,18 +8,29 @@
 #include <HTTPClient.h>
 #include <Wire.h>
 #include <Adafruit_AHTX0.h>
+#include <Preferences.h>
+#include <WebServer.h>
+#include <DNSServer.h>
 #include <utility>
 
 // ===== Wi-Fi и сервер =====
-// WIFI_SSID, WIFI_PASS, SERVER, API_TOKEN — в secrets.h (не в репозитории).
-// Скопируйте secrets.example.h в secrets.h и впишите свои значения.
+// Настройки хранятся в памяти устройства (Preferences) и задаются с телефона в режиме настройки.
+// secrets.h (не в репозитории) необязателен: его значения используются, пока в памяти ничего нет.
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
-#warning "secrets.h не найден, используются значения из secrets.example.h"
-#include "secrets.example.h"
+const char* WIFI_SSID  = "";
+const char* WIFI_PASS  = "";
+const char* SERVER     = "";
+const char* API_TOKEN  = "";
 #endif
 const char* DEVICE_ID  = "plant1";
+
+// ===== Режим настройки =====
+// Нет сети / не подключился за 10 с / 3 хлопка → точка доступа, форма на http://192.168.4.1
+const char* AP_SSID = "Autopoliv-Setup";
+const char* AP_PASS = "plant1234";
+const unsigned long SETUP_RETRY_MS = 300000;   // без клиентов — раз в 5 мин снова пробуем подключиться
 const unsigned long SEND_INTERVAL = 30000;
 
 // ===== Пины =====
@@ -120,6 +131,13 @@ bool  soilDry = false;
 
 bool wifiOk = false, serverOk = false;
 
+Preferences prefs;
+WebServer web(80);
+DNSServer dns;
+String cfgSsid, cfgPass, cfgServer, cfgToken;
+bool setupMode = false;
+unsigned long setupSince = 0;
+String scanItems;   // HTML-список сетей с последнего сканирования
 
 String toastText;
 unsigned long toastUntil = 0;
@@ -302,6 +320,11 @@ void drawHeader(const char* title) {
     canvas.setFont(&fonts::FreeSansBold9pt7b);
     canvas.setTextColor(C_INK);
     canvas.drawString(title, 6, 2);
+  } else if (setupMode) {              // в режиме настройки — адрес формы
+    canvas.setTextDatum(textdatum_t::top_left);
+    canvas.setFont(&fonts::Font2);
+    canvas.setTextColor(C_INK);
+    canvas.drawString("Setup: " + WiFi.softAPIP().toString(), 6, 3);
   } else {
     drawSparkline(6, 3, 126, 15);      // вместо названия — график звука
   }
@@ -421,12 +444,12 @@ int jsonInt(const String& s, const char* key, int def) {
 
 bool postJson(const char* path, const String& body, String* response) {
   wifiOk = (WiFi.status() == WL_CONNECTED);
-  if (!wifiOk) return false;
+  if (!wifiOk || cfgServer.length() == 0) return false;
   HTTPClient http;
   http.setTimeout(3000);
-  http.begin(String(SERVER) + path);
+  http.begin(cfgServer + path);
   http.addHeader("Content-Type", "application/json");
-  if (strlen(API_TOKEN) > 0) http.addHeader("X-Api-Key", API_TOKEN);
+  if (cfgToken.length() > 0) http.addHeader("X-Api-Key", cfgToken);
   int code = http.POST(body);
   bool ok = (code == 200);
   if (ok && response) *response = http.getString();
@@ -506,23 +529,167 @@ void updateSensors() {
   }
 }
 
-// ===== Команды хлопками =====
-void runCommand(int claps) {
-  if (claps == 1) {
-    toast("Hello! I am listening");          // 1 хлопок — приветствие
-  } else if (claps == 2) {
-    water("claps");                           // 2 хлопка — полив
-  } else {
-    toast("Unknown: " + String(claps) + " claps");
+// ===== Настройки сети (Preferences) =====
+// Адрес сервера: без схемы дописываем http://, «/» в конце убираем
+String normalizeServer(String s) {
+  s.trim();
+  while (s.endsWith("/")) s.remove(s.length() - 1);
+  if (s.length() > 0 && s.indexOf("://") < 0) s = "http://" + s;
+  return s;
+}
+
+String prefOr(const char* key, const char* def) {
+  return prefs.isKey(key) ? prefs.getString(key) : String(def);
+}
+
+void loadConfig() {
+  prefs.begin("net", true);
+  cfgSsid   = prefOr("ssid", WIFI_SSID);
+  cfgPass   = prefOr("pass", WIFI_PASS);
+  cfgServer = normalizeServer(prefOr("server", SERVER));
+  cfgToken  = prefOr("token", API_TOKEN);
+  prefs.end();
+  Serial.printf("Настройки: сеть \"%s\", сервер %s\n", cfgSsid.c_str(), cfgServer.c_str());
+}
+
+void saveConfig() {
+  prefs.begin("net", false);
+  prefs.putString("ssid", cfgSsid);
+  prefs.putString("pass", cfgPass);
+  prefs.putString("server", cfgServer);
+  prefs.putString("token", cfgToken);
+  prefs.end();
+}
+
+// ===== Режим настройки: точка доступа + форма =====
+String htmlEscape(const String& s) {
+  String r;
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (c == '&') r += "&amp;";
+    else if (c == '<') r += "&lt;";
+    else if (c == '>') r += "&gt;";
+    else if (c == '"') r += "&quot;";
+    else r += c;
   }
+  return r;
+}
+
+// Сканирование асинхронное: отдаём прошлый результат и запускаем новое
+void refreshScan() {
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) return;
+  if (n >= 0) {
+    scanItems = "";
+    for (int i = 0; i < n; i++) {
+      String s = htmlEscape(WiFi.SSID(i));
+      if (s.length() == 0 || scanItems.indexOf("<b>" + s + "</b>") >= 0) continue;
+      scanItems += "<li onclick=\"f.ssid.value=this.firstChild.textContent\"><b>" + s +
+                   "</b> " + String(WiFi.RSSI(i)) + " дБм</li>";
+    }
+    WiFi.scanDelete();
+  }
+  WiFi.scanNetworks(true);
+}
+
+const char PAGE_HEAD[] PROGMEM = R"html(<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Автополив</title>
+<style>body{font-family:sans-serif;max-width:420px;margin:16px auto;padding:0 16px}
+input,button{width:100%;box-sizing:border-box;padding:10px;margin:4px 0 12px;font-size:16px}
+li{padding:8px;border-bottom:1px solid #ddd;cursor:pointer;list-style:none}ul{padding:0}
+small{color:#666}</style></head><body>)html";
+
+void handleRoot() {
+  refreshScan();
+  String p = FPSTR(PAGE_HEAD);
+  p += "<h2>Настройка автополива</h2><form id=f method=post action=/save>";
+  p += "<label>Сеть Wi-Fi</label><input name=ssid required value=\"" + htmlEscape(cfgSsid) + "\">";
+  p += "<ul>" + (scanItems.length() ? scanItems : String("<li>Поиск сетей… обновите страницу</li>")) + "</ul>";
+  p += "<label>Пароль Wi-Fi</label><input name=pass type=password placeholder=\"пусто — не менять\">";
+  p += "<label>Адрес сервера</label><input name=server placeholder=\"http://192.168.1.100:8000\" value=\"" +
+       htmlEscape(cfgServer) + "\">";
+  p += "<label>Токен устройства</label><input name=token type=password placeholder=\"" +
+       String(cfgToken.length() ? "задан, пусто — не менять" : "PLANT_TOKEN на сервере") + "\">";
+  p += "<button>Сохранить и перезагрузить</button></form>";
+  p += "<small>Пароль Wi-Fi можно не вводить, если сеть та же. Для открытой сети выберите её и оставьте пароль пустым.</small>";
+  p += "</body></html>";
+  web.send(200, "text/html; charset=utf-8", p);
+}
+
+void handleSave() {
+  String ssid = web.arg("ssid");
+  ssid.trim();
+  if (ssid.length() == 0) {
+    web.send(400, "text/plain; charset=utf-8", "Укажите сеть Wi-Fi");
+    return;
+  }
+  String pass = web.arg("pass");
+  if (pass.length() > 0 || ssid != cfgSsid) cfgPass = pass;   // пустой пароль у той же сети — не менять
+  cfgSsid = ssid;
+  cfgServer = normalizeServer(web.arg("server"));
+  String token = web.arg("token");
+  token.trim();
+  if (token.length() > 0) cfgToken = token;
+  saveConfig();
+  Serial.printf("Настройки сохранены: сеть \"%s\", сервер %s\n", cfgSsid.c_str(), cfgServer.c_str());
+
+  web.send(200, "text/html; charset=utf-8",
+           String(FPSTR(PAGE_HEAD)) + "<h2>Сохранено</h2><p>Устройство перезагружается и подключается к сети «" +
+           htmlEscape(cfgSsid) + "».</p></body></html>");
+  toast("Saved, rebooting", 5000);
+  renderFrame();
+  delay(1500);
+  ESP.restart();
+}
+
+// Любой адрес → форма (телефон сам откроет страницу входа в сеть)
+void handleRedirect() {
+  web.sendHeader("Location", "http://" + WiFi.softAPIP().toString() + "/", true);
+  web.send(302, "text/plain", "");
+}
+
+void startSetup() {
+  static bool routes = false;
+  if (!routes) {
+    web.on("/", HTTP_GET, handleRoot);
+    web.on("/save", HTTP_POST, handleSave);
+    web.onNotFound(handleRedirect);
+    routes = true;
+  }
+  WiFi.setAutoReconnect(false);   // попытки подключения переключают канал и мешают точке доступа
+  WiFi.disconnect();
+  WiFi.mode(WIFI_AP_STA);         // STA нужен для сканирования сетей
+  WiFi.softAP(AP_SSID, AP_PASS);
+  dns.start(53, "*", WiFi.softAPIP());
+  web.begin();
+  WiFi.scanNetworks(true);
+
+  setupMode = true;
+  setupSince = millis();
+  wifiOk = serverOk = false;
+  Serial.printf("Режим настройки: сеть %s (пароль %s), http://%s\n",
+                AP_SSID, AP_PASS, WiFi.softAPIP().toString().c_str());
+  toast("Setup mode");
+}
+
+void stopSetup() {
+  web.stop();
+  dns.stop();
+  WiFi.softAPdisconnect(true);
+  setupMode = false;
 }
 
 void connectWiFi() {
+  if (cfgSsid.length() == 0) {
+    Serial.println("Wi-Fi не настроен");
+    startSetup();
+    return;
+  }
   toast("Connecting WiFi...", 15000);
   renderFrame();
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  WiFi.begin(cfgSsid.c_str(), cfgPass.c_str());
   unsigned long t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000) delay(200);
 
@@ -532,8 +699,38 @@ void connectWiFi() {
     Serial.println(WiFi.localIP());
     toast("WiFi " + WiFi.localIP().toString());
   } else {
-    Serial.println("Wi-Fi не подключился, работаем без сервера");
-    toast("Offline mode");
+    Serial.println("Wi-Fi не подключился, включаю режим настройки");
+    startSetup();
+  }
+}
+
+void handleSetup() {
+  if (!setupMode) return;
+  dns.processNextRequest();
+  web.handleClient();
+  // Роутер мог просто загружаться дольше устройства — периодически пробуем снова
+  if (WiFi.softAPgetStationNum() > 0) setupSince = millis();
+  if (cfgSsid.length() > 0 && millis() - setupSince > SETUP_RETRY_MS) {
+    stopSetup();
+    connectWiFi();
+  }
+}
+
+// ===== Команды хлопками =====
+void runCommand(int claps) {
+  if (claps == 1) {
+    toast("Hello! I am listening");          // 1 хлопок — приветствие
+  } else if (claps == 2) {
+    water("claps");                           // 2 хлопка — полив
+  } else if (claps == 3) {                    // 3 хлопка — режим настройки (повторно — выход)
+    if (setupMode) {
+      stopSetup();
+      connectWiFi();
+    } else {
+      startSetup();
+    }
+  } else {
+    toast("Unknown: " + String(claps) + " claps");
   }
 }
 
@@ -564,6 +761,7 @@ void setup() {
   ahtOk = aht.begin();
   if (!ahtOk) Serial.println("AHT20 не найден");
 
+  loadConfig();
   connectWiFi();
 
   xTaskCreatePinnedToCore(micTask, "mic", 4096, NULL, 1, NULL, 0);
@@ -575,6 +773,8 @@ void setup() {
 
 void loop() {
   if (Serial.available() && Serial.read() == 'w') water("manual");
+
+  handleSetup();
 
   if (clapCount > 0 && millis() - lastClap > CLAP_WAIT) {
     int n = clapCount;
