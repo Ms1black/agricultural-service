@@ -119,8 +119,13 @@ def forecast(request: Request, device: str = "plant1") -> dict:
 
 
 @router.post("/voice")
-async def voice(request: Request, x_device: str = Header(default="plant1")) -> Response:
-    """Контракт 4.3: PCM 16 бит / 16 кГц → PCM ответа + X-Transcript, X-Answer, X-Answer-Id."""
+async def voice(request: Request, x_device: str = Header(default="plant1"),
+                wake: bool = False) -> Response:
+    """Контракт 4.3: PCM 16 бит / 16 кГц → PCM ответа + X-Transcript, X-Answer, X-Answer-Id.
+
+    wake=1 (V3): фраза записана без хлопка, по голосу. Нет «Джарвис» в начале — 204 без тела;
+    только «Джарвис» — «Слушаю.» и X-Listen: 1; слишком много фраз без обращения — 429.
+    """
     from starlette.concurrency import run_in_threadpool
 
     from . import voice as v
@@ -133,14 +138,22 @@ async def voice(request: Request, x_device: str = Header(default="plant1")) -> R
         raise HTTPException(413, "фраза длиннее 8 с")
     if len(body) < RATE // 5 * 2:
         raise HTTPException(400, "пустая фраза")
+    if wake and v.wake_busy(x_device):
+        return Response(status_code=429, headers={"Retry-After": str(v.WAKE_RETRY_S)})
     try:
         r = await run_in_threadpool(v.handle, st.db, st.llm, st.stt, st.tts,
-                                    st.settings.voice_path, x_device, pcm16_to_float(body))
+                                    st.settings.voice_path, x_device, pcm16_to_float(body),
+                                    wake)
     except v.engines.VoiceUnavailable as e:
         raise HTTPException(503, f"голос недоступен: {e}") from e
-    return Response(content=r.pcm, media_type="audio/L16; rate=16000; channels=1", headers={
-        "X-Transcript": quote(r.transcript), "X-Answer": quote(r.answer),
-        "X-Answer-Id": str(r.id)})
+    if r is None:
+        return Response(status_code=204)
+    headers = {"X-Transcript": quote(r.transcript), "X-Answer": quote(r.answer),
+               "X-Answer-Id": str(r.id)}
+    if r.listen:
+        headers["X-Listen"] = "1"
+    return Response(content=r.pcm, media_type="audio/L16; rate=16000; channels=1",
+                    headers=headers)
 
 
 @router.post("/event")
