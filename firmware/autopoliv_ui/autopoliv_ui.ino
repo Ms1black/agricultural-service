@@ -14,6 +14,7 @@
 #include <ArduinoJson.h>
 #include <freertos/stream_buffer.h>
 #include "audio_out.h"   // голос (V2): настройки и вывод звука
+#include "jarvis_sprite.h"   // персонаж «Джарвис» для экрана
 #include <time.h>
 #include <utility>
 
@@ -501,23 +502,47 @@ void drawToast() {
   }
 }
 
+// ===== Персонаж «Джарвис» =====
+void drawJarvis(int x, int y, int scale) {
+  for (int j = 0; j < JARVIS_H; j++) {
+    for (int i = 0; i < JARVIS_W; i++) {
+      char ch = JARVIS[j][i];
+      if (ch == '.') continue;
+      const uint8_t* c = JARVIS_RGB[ch - 'a'];
+      canvas.fillRect(x + i * scale, y + j * scale, scale, scale, canvas.color565(c[0], c[1], c[2]));
+    }
+  }
+}
+
+// Голосовой помощник работает — вместо датчиков персонаж, внизу полоса состояния
+void drawJarvisScreen() {
+  const int s = 6, w = JARVIS_W * s;
+  int bob = (voiceState == VS_LISTEN && (millis() / 400) % 2) ? -2 : 0;   // «дышит», пока слушает
+  drawJarvis((160 - w) / 2, 10 + bob, s);
+}
+
 void renderFrame() {
   canvas.fillScreen(C_BG);
-  drawMainScreen();
+  if (voiceState != VS_IDLE) drawJarvisScreen();
+  else drawMainScreen();
   drawToast();
   canvas.pushSprite(0, 0);
 }
 
+// Полив: персонаж под падающими каплями (кадр зависит от времени — вызывать в цикле)
 void renderWatering(const String& reason) {
+  const int s = 5, w = JARVIS_W * s, x0 = (160 - w) / 2, y0 = 30;
   canvas.fillScreen(C_BG);
-  drawDrop(80, 58, 14, C_INK);
-  canvas.setFont(&fonts::FreeSansBold12pt7b);
-  canvas.setTextDatum(textdatum_t::top_center);
-  canvas.setTextColor(C_INK);
-  canvas.drawString("Watering", 80, 80);
-  canvas.setFont(&fonts::Font0);
-  canvas.setTextColor(C_MUTED);
-  canvas.drawString(reason, 80, 108);
+  drawJarvis(x0, y0, s);
+  uint16_t blue = canvas.color565(70, 150, 230);
+  unsigned long t = millis();
+  const int cols[] = {x0 + 8, x0 + 30, x0 + 52, x0 + 70, x0 + 18, x0 + 60};
+  for (int k = 0; k < 6; k++) {
+    int y = (t / 6 + k * 23) % 60;                    // падают сверху до головы и дальше
+    if (y > 32) continue;
+    drawDrop(cols[k], y + 4, 3, blue);
+  }
+  drawBar("Watering: " + reason);
   canvas.pushSprite(0, 0);
 }
 
@@ -553,7 +578,11 @@ void water(String reason, unsigned long ms = WATER_MS) {
   Serial.printf(">>> Полив: %s, %lu мс\n", reason.c_str(), ms);
   renderWatering(reason);
   digitalWrite(PIN_RELAY, RELAY_ON);
-  delay(ms);
+  unsigned long t0 = millis();
+  while (millis() - t0 < ms) {         // пока работает насос — капли падают на персонажа
+    renderWatering(reason);
+    delay(30);
+  }
   digitalWrite(PIN_RELAY, RELAY_OFF);
   lastWater = millis();
   everWatered = true;
