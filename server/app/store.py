@@ -37,9 +37,11 @@ def get_calibration(db: Database, device: str) -> dict | None:
 def set_calibration(db: Database, device: str, dry_raw: int, wet_raw: int) -> None:
     with db.conn() as c:
         c.execute(
-            "INSERT OR REPLACE INTO calibration (device, dry_raw, wet_raw, updated) "
-            "VALUES (?, ?, ?, ?)",
-            (device, dry_raw, wet_raw, time.time()),
+            "INSERT INTO calibration (device, dry_raw, wet_raw, raw_dry, raw_wet, updated) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(device) DO UPDATE SET "
+            "dry_raw = excluded.dry_raw, wet_raw = excluded.wet_raw, raw_dry = excluded.raw_dry, "
+            "raw_wet = excluded.raw_wet, updated = excluded.updated",
+            (device, dry_raw, wet_raw, dry_raw, wet_raw, time.time()),
         )
 
 

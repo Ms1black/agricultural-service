@@ -82,6 +82,27 @@ MIGRATIONS: list[list[str]] = [
             taken REAL NOT NULL
         )""",
     ],
+    # 4 — калибровка под растение (C1): расширение calibration, старые поля сохранены
+    [
+        "ALTER TABLE calibration ADD COLUMN plant_type TEXT",
+        "ALTER TABLE calibration ADD COLUMN target_low REAL",
+        "ALTER TABLE calibration ADD COLUMN target_high REAL",
+        "ALTER TABLE calibration ADD COLUMN raw_dry INTEGER",
+        "ALTER TABLE calibration ADD COLUMN raw_wet INTEGER",
+        "ALTER TABLE calibration ADD COLUMN k_dose REAL",
+        "ALTER TABLE calibration ADD COLUMN response_delay_min REAL",
+        "ALTER TABLE calibration ADD COLUMN dry_rate REAL",
+        "ALTER TABLE calibration ADD COLUMN confidence TEXT NOT NULL DEFAULT 'none'",
+        "ALTER TABLE calibration ADD COLUMN cycles INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE calibration ADD COLUMN stage INTEGER NOT NULL DEFAULT 0",
+        "UPDATE calibration SET raw_dry = dry_raw, raw_wet = wet_raw",
+        # Состояние автомата калибровки (импульсы, ожидание плато, аномалия)
+        """CREATE TABLE IF NOT EXISTS calibration_state (
+            device TEXT PRIMARY KEY,
+            state_json TEXT NOT NULL,
+            updated REAL NOT NULL
+        )""",
+    ],
 ]
 
 

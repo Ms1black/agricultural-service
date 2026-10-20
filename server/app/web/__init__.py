@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
+from .. import calibration as cb
 from .. import store
 from ..auth import require_web
 from ..llm import LLMError
@@ -179,6 +180,55 @@ def voice_audio(vid: int, request: Request) -> FileResponse:
     if not path or not Path(path).exists():
         raise HTTPException(404, "нет записи")
     return FileResponse(path, media_type="audio/wav")
+
+
+class ProfileRequest(BaseModel):
+    device: str = "plant1"
+    plant_type: str
+    target_low: float | None = None
+    target_high: float | None = None
+
+
+def calibration_state(db, device: str) -> dict:
+    cal = cb.get(db, device)
+    state = cal.pop("state")
+    with db.conn() as c:
+        anomalies = [dict(r) for r in c.execute(
+            "SELECT ts, type, note FROM events WHERE device = ? AND type IN "
+            "('anomaly', 'anomaly_confirmed') ORDER BY ts DESC LIMIT 10", (device,))]
+    return {"calibration": cal, "state": state, "hint": cb.hint({**cal, "state": state}),
+            "profiles": {k: {"title": t, "low": lo, "high": hi}
+                         for k, (t, lo, hi) in cb.PROFILES.items()},
+            "anomalies": anomalies}
+
+
+@router.get("/web/api/calibration/state")
+def calibration_get(request: Request, device: str = "plant1") -> dict:
+    return calibration_state(request.app.state.db, device)
+
+
+@router.post("/web/api/calibration/profile")
+def calibration_profile(req: ProfileRequest, request: Request) -> dict:
+    try:
+        cb.set_profile(request.app.state.db, req.device, req.plant_type, req.target_low,
+                       req.target_high)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return calibration_state(request.app.state.db, req.device)["calibration"]
+
+
+@router.post("/web/api/calibration/{action}")
+def calibration_action(action: str, request: Request, device: str = "plant1") -> dict:
+    db = request.app.state.db
+    actions = {"dry": cb.mark_dry, "wet": cb.start_wet, "confirm": cb.confirm_anomaly,
+               "reset": cb.reset}
+    if action not in actions:
+        raise HTTPException(404, "нет такого шага")
+    try:
+        actions[action](db, device)
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+    return calibration_state(db, device)
 
 
 @router.get("/web/api/export.csv")

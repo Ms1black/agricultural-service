@@ -42,6 +42,14 @@
   #voice-log .meta { color:var(--muted); font-size:12px; }
   button.on { background:var(--accent); border-color:var(--accent); }
   button.rec { background:#c44; border-color:#c44; }
+  .steps { display:flex; gap:4px; margin:8px 0; }
+  .steps div { flex:1; text-align:center; padding:6px 4px; border:1px solid var(--faint);
+               border-radius:4px; font-size:13px; color:var(--muted); }
+  .steps div.done { background:var(--ink); color:var(--bg); border-color:var(--ink); }
+  .steps div.now { border:2px solid var(--ink); color:var(--ink); font-weight:700; }
+  #cal-hint { font-weight:600; }
+  #cal-hint.warn { color:#c44; }
+  details summary { cursor:pointer; color:var(--muted); margin:8px 0; }
   #chat-input { flex:1; min-width:180px; }
 </style>
 </head>
@@ -99,14 +107,33 @@
     <span class="muted">Команда уйдёт с ближайшей телеметрией (до 30 с), действует 2 мин.</span>
   </div>
 
-  <h2>Калибровка датчика</h2>
-  <div class="row">
-    Сухо <input type="number" id="dry" min="0" max="4095">
-    Мокро <input type="number" id="wet" min="0" max="4095">
-    <button id="cal-save">Сохранить</button>
-    <button class="ghost" id="cal-dry">Сейчас сухо</button>
-    <button class="ghost" id="cal-wet">Только что полили</button>
+  <h2>Калибровка под растение</h2>
+  <div class="steps" id="cal-steps">
+    <div>0. Профиль</div><div>1. Датчик</div><div>2. Доза</div><div>3. Высыхание</div><div>Готово</div>
   </div>
+  <p id="cal-hint"></p>
+  <div class="row">
+    <select id="cal-type"></select>
+    <input type="number" id="cal-low" min="0" max="100" title="нижняя граница, %"> –
+    <input type="number" id="cal-high" min="0" max="100" title="верхняя граница, %"> %
+    <button class="ghost" id="cal-profile">Выбрать</button>
+    <button class="ghost" id="cal-mark-dry">Сухо</button>
+    <button class="ghost" id="cal-mark-wet">Пролил</button>
+    <button class="ghost" id="cal-confirm" hidden>Подтвердить: насос в порядке</button>
+  </div>
+  <table><tbody id="cal-params"></tbody></table>
+  <p class="muted" id="cal-anomalies"></p>
+  <details>
+    <summary>Ручная калибровка датчика и сброс</summary>
+    <div class="row">
+      Сухо <input type="number" id="dry" min="0" max="4095">
+      Мокро <input type="number" id="wet" min="0" max="4095">
+      <button id="cal-save">Сохранить</button>
+      <button class="ghost" id="cal-dry">Сейчас сухо</button>
+      <button class="ghost" id="cal-wet">Только что полили</button>
+      <button class="ghost" id="cal-reset">Начать калибровку заново</button>
+    </div>
+  </details>
   <p id="msg" class="muted"></p>
 
   <h2>События</h2>
@@ -248,7 +275,8 @@ async function loadChart() {
 }
 
 async function refresh() {
-  try { await loadState(); await loadChart(); } catch (e) { say('Ошибка: ' + e.message); }
+  try { await loadState(); await loadChart(); await loadCalibration(); }
+  catch (e) { say('Ошибка: ' + e.message); }
 }
 
 $('water').onclick = async () => {
@@ -380,6 +408,60 @@ $('talk').onclick = async () => {
   $('talk').classList.add('rec'); $('talk').textContent = 'Стоп';
   $('voice-msg').textContent = 'Слушаю… (до 8 с)';
 };
+
+// ----- калибровка под растение (C1) -----
+const CONF = { none:'нет', low:'низкая', medium:'средняя', high:'высокая' };
+let calProfilesShown = false;
+async function loadCalibration() {
+  const s = await api('web/api/calibration/state?device=' + encodeURIComponent(dev()));
+  const c = s.calibration, st = s.state, stage = c.stage || 0;
+  if (!calProfilesShown) {
+    $('cal-type').innerHTML = Object.entries(s.profiles).map(([k, p]) =>
+      `<option value="${k}">${p.title} (${p.low}–${p.high} %)</option>`).join('');
+    calProfilesShown = true;
+  }
+  if (c.plant_type && document.activeElement.tagName !== 'INPUT' &&
+      document.activeElement.tagName !== 'SELECT') {
+    $('cal-type').value = c.plant_type;
+    $('cal-low').value = c.target_low; $('cal-high').value = c.target_high;
+  }
+  [...$('cal-steps').children].forEach((d, i) => {
+    d.classList.toggle('done', i < stage); d.classList.toggle('now', i === stage);
+  });
+  $('cal-hint').textContent = s.hint;
+  $('cal-hint').classList.toggle('warn', !!(st.anomaly || st.error));
+  $('cal-confirm').hidden = !st.anomaly;
+  $('cal-mark-dry').hidden = stage !== 1;
+  $('cal-mark-wet').hidden = !(stage === 1 && st.dry_done && !st.wet_started);
+  const num = (v, d = 1) => v == null ? '—' : (+v).toFixed(d);
+  const rows = [
+    ['Целевой диапазон', c.target_low == null ? '—' : `${c.target_low}–${c.target_high} %`],
+    ['Датчик: сухо / влажно (raw)', `${c.raw_dry ?? '—'} / ${c.raw_wet ?? '—'}`],
+    ['Доза, % за секунду (k_dose)', num(c.k_dose, 2)],
+    ['Задержка отклика, мин', num(c.response_delay_min)],
+    ['Скорость высыхания, %/ч', num(c.dry_rate, 2)],
+    ['Уверенность', `${CONF[c.confidence] || '—'} · циклов: ${c.cycles ?? 0}`],
+  ];
+  $('cal-params').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+  $('cal-anomalies').textContent = s.anomalies.length ? 'Журнал аномалий: ' + s.anomalies.map(a =>
+    `${fmtTime(a.ts)} — ${a.type === 'anomaly' ? a.note : 'подтверждено'}`).join('; ') : '';
+}
+async function calStep(path, body) {
+  try {
+    await api(path + (body ? '' : '?device=' + encodeURIComponent(dev())), body || {});
+    await loadCalibration();
+  } catch (e) { say('Калибровка: ' + e.message); }
+}
+$('cal-profile').onclick = () => calStep('web/api/calibration/profile', {
+  device: dev(), plant_type: $('cal-type').value,
+  target_low: $('cal-low').value === '' ? null : +$('cal-low').value,
+  target_high: $('cal-high').value === '' ? null : +$('cal-high').value });
+$('cal-type').onchange = () => { $('cal-low').value = ''; $('cal-high').value = ''; };
+$('cal-mark-dry').onclick = () => calStep('web/api/calibration/dry');
+$('cal-mark-wet').onclick = () => calStep('web/api/calibration/wet');
+$('cal-confirm').onclick = () => calStep('web/api/calibration/confirm');
+$('cal-reset').onclick = () => confirm('Начать калибровку заново?') &&
+  calStep('web/api/calibration/reset');
 
 $('device').onchange = () => {
   chat.length = 0; $('chat-log').innerHTML = '';

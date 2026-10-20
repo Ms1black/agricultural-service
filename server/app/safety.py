@@ -15,7 +15,7 @@ MAX_PER_DAY = 6
 MAX_SOIL_PCT = 70                                # влажнее — не поливать
 FRESH_DATA_S = 120                               # нет свежих данных — решений не принимать
 # Поливы, которые считаются «по решению сервера / голосу»
-SERVER_REASONS = ("voice", "ml", "web")
+SERVER_REASONS = ("voice", "ml", "web", "calib")
 
 
 @dataclass
@@ -36,6 +36,10 @@ def check(db: Database, device: str, seconds: float, now: float | None = None,
         return Verdict(False, 0, f"почва достаточно влажная ({m['soil_pct']} %)")
     if not m["soil_ok"] and not m["soil_dry_d0"]:
         return Verdict(False, 0, "датчик показывает, что почва влажная")
+    from .calibration import anomaly_active
+    anomaly = anomaly_active(db, device)
+    if anomaly:
+        return Verdict(False, 0, "аномалия полива не подтверждена: " + anomaly["text"])
     if store.pending_command(db, device, 120):
         return Verdict(False, 0, "полив уже ждёт отправки на устройство")
     with db.conn() as c:
