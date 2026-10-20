@@ -531,18 +531,42 @@ void renderFrame() {
   canvas.pushSprite(0, 0);
 }
 
-// Полив: персонаж под падающими каплями (кадр зависит от времени — вызывать в цикле)
+// Плавное моргание: веко (цвет кожи) опускается на глаза попиксельно и поднимается обратно
+const unsigned long BLINK_EVERY_MS = 2600, BLINK_MS = 320;
+void drawBlink(int x0, int y0, int s, unsigned long t) {
+  unsigned long p = t % BLINK_EVERY_MS;
+  if (p >= BLINK_MS) return;
+  float k = sinf(PI * p / (float)BLINK_MS);            // 0 → 1 → 0
+  int h = (int)roundf(k * 2 * s);                       // глаз — 2 клетки спрайта в высоту
+  if (h <= 0) return;
+  const uint8_t* skin = JARVIS_RGB['d' - 'a'];
+  uint16_t lid = canvas.color565(skin[0], skin[1], skin[2]);
+  for (int col : {4, 8}) {                              // левый и правый глаз: колонки 4–5 и 8–9
+    int ex = x0 + col * s, ey = y0 + 8 * s;
+    canvas.fillRect(ex, ey, 2 * s, h, lid);
+    canvas.drawFastHLine(ex, ey + h - 1, 2 * s, canvas.color565(0, 0, 0));   // край века
+  }
+}
+
+// Полив: персонаж моргает, капли падают сверху и по бокам (кадр зависит от времени — в цикле)
 void renderWatering(const String& reason) {
   const int s = 5, w = JARVIS_W * s, x0 = (160 - w) / 2, y0 = 30;
   canvas.fillScreen(C_BG);
-  drawJarvis(x0, y0, s, true);         // жмурится от брызг
-  uint16_t blue = canvas.color565(70, 150, 230);
+  drawJarvis(x0, y0, s);
   unsigned long t = millis();
-  const int cols[] = {x0 + 8, x0 + 30, x0 + 52, x0 + 70, x0 + 18, x0 + 60};
+  drawBlink(x0, y0, s, t);
+  uint16_t blue = canvas.color565(70, 150, 230);
+  // над головой — падают до макушки
+  const int top[] = {x0 + 8, x0 + 30, x0 + 52, x0 + 70, x0 + 18, x0 + 60};
   for (int k = 0; k < 6; k++) {
-    int y = (t / 6 + k * 23) % 60;                    // падают сверху до головы и дальше
-    if (y > 32) continue;
-    drawDrop(cols[k], y + 4, 3, blue);
+    int y = (t / 6 + k * 23) % 60;
+    if (y <= 32) drawDrop(top[k], y + 4, 3, blue);
+  }
+  // по бокам — во всю высоту, до полосы внизу
+  const int side[] = {12, 26, 134, 148};
+  for (int k = 0; k < 4; k++) {
+    int y = (t / 5 + k * 37) % 120;
+    if (y <= 98) drawDrop(side[k], y + 6, 3, blue);
   }
   drawBar("Watering: " + reason);
   canvas.pushSprite(0, 0);
