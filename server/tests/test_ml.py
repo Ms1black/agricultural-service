@@ -309,3 +309,21 @@ def test_waterings_endpoint(app, device, web):
     device.post("/api/event", json={"device": "plant1", "type": "water", "value": 3,
                                     "note": "claps"})
     assert web.get("/web/api/waterings?hours=1").json()[0]["note"] == "claps"
+
+
+def test_download_continues_when_one_source_fails(tmp_path, monkeypatch, capsys):
+    from app.ml.datasets import __main__ as cli
+    from app.ml.datasets import sources
+
+    def boom(folder):
+        raise RuntimeError("403 Forbidden")
+
+    def ok(folder):
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "x").write_text("1")
+    monkeypatch.setenv("PLANT_EXTERNAL_DIR", str(tmp_path))
+    patched = {k: s.__class__(**{**s.__dict__, "download": boom if s.auxiliary else ok})
+               for k, s in sources().items()}
+    monkeypatch.setattr(cli, "sources", lambda: patched)
+    assert cli.download([]) == 0
+    assert "mendeley: не скачан (вспомогательный" in capsys.readouterr().out

@@ -15,10 +15,24 @@ URL = ("https://data.mendeley.com/public-files/datasets/m6j79zjyd7/files/"
        "ffa66cce-fc80-47ce-86ec-f376f937359d/file_downloaded")
 
 
+API = "https://data.mendeley.com/public-api/datasets/m6j79zjyd7/files?folder_id=root&version=1"
+HEADERS = {"User-Agent": "Mozilla/5.0 (plant-care research; open dataset download)"}
+
+
 def download(folder: Path) -> None:
+    """Ссылку на файл берём из API (она меняется); с некоторых IP Mendeley отвечает 403 —
+    тогда файл можно скачать в браузере и положить в data/external/mendeley/ вручную."""
     folder.mkdir(parents=True, exist_ok=True)
-    r = httpx.get(URL, timeout=60, follow_redirects=True)
-    r.raise_for_status()
+    with httpx.Client(timeout=60, follow_redirects=True, headers=HEADERS) as http:
+        url = URL
+        try:
+            files = http.get(API).json()
+            url = next(f["content_details"]["download_url"] for f in files
+                       if f["filename"] == FILE)
+        except Exception:
+            pass
+        r = http.get(url)
+        r.raise_for_status()
     (folder / FILE).write_bytes(r.content)
 
 

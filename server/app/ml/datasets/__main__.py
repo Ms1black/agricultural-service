@@ -26,14 +26,25 @@ watering_event` (+ `watering_inferred`, если полив найден по р
 """
 
 
-def download(keys: list[str]) -> None:
+def download(keys: list[str]) -> int:
+    """Скачать источники; ошибка одного не останавливает остальные."""
     root = data_dir()
+    failed = []
     for key, s in sources().items():
         if keys and key not in keys:
             continue
         print(f"{key}: загрузка…", flush=True)
-        s.download(root / key)
-    print(f"Готово: {root}")
+        try:
+            s.download(root / key)
+        except Exception as e:  # сеть, 403 и т. п. — остальные источники всё равно качаем
+            failed.append(key)
+            role = " (вспомогательный, для обучения не нужен)" if s.auxiliary else ""
+            print(f"{key}: не скачан{role}: {e}", flush=True)
+    print(f"Готово: {root}" + (f"; не скачаны: {', '.join(failed)}" if failed else ""))
+    # Ошибка — только если не скачался ни один основной источник
+    main_ok = any(not s.auxiliary and k not in failed and (root / k).is_dir()
+                  for k, s in sources().items())
+    return 0 if main_ok else 1
 
 
 def report(path: Path) -> None:
@@ -82,7 +93,7 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 1
     if argv[0] == "download":
-        download(argv[1:])
+        return download(argv[1:])
     else:
         report(Path(argv[1]) if len(argv) > 1 else REPORT)
     return 0

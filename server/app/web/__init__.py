@@ -232,6 +232,28 @@ def calibration_action(action: str, request: Request, device: str = "plant1") ->
     return calibration_state(db, device)
 
 
+class AssistantRequest(BaseModel):
+    name: str
+
+
+@router.get("/web/api/assistant")
+def assistant_get(request: Request) -> dict:
+    from .. import assistant
+    return {"name": assistant.get_name(request.app.state.db),
+            "default": assistant.DEFAULT_NAME}
+
+
+@router.post("/web/api/assistant")
+def assistant_set(req: AssistantRequest, request: Request) -> dict:
+    """Имя помощника: им он представляется в ответах и на него откликается голосом (V3)."""
+    from .. import assistant
+    try:
+        name = assistant.set_name(request.app.state.db, req.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"name": name, "default": assistant.DEFAULT_NAME}
+
+
 class ModeRequest(BaseModel):
     device: str = "plant1"
     mode: str

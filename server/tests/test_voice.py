@@ -263,3 +263,28 @@ def test_wake_backs_off_after_many_misses(voice_app, device):
     r = say(voice_app, device, "шум", path="/api/voice?wake=1")
     assert r.status_code == 429 and r.headers["Retry-After"] == "30"
     voice._misses.clear()
+
+
+
+# ----- имя помощника -----
+
+def test_assistant_name_changes_wake_word_and_prompt(voice_app, device, web):
+    from app import voice
+    assert web.get("/web/api/assistant").json()["name"] == "Джарвис"
+    assert web.post("/web/api/assistant", json={"name": "Бася"}).json()["name"] == "Бася"
+    assert web.post("/web/api/assistant", json={"name": "1"}).status_code == 400
+    voice._misses.clear()
+    # Старое имя больше не зовёт помощника, новое — зовёт
+    assert say(voice_app, device, "Джарвис, как дела", path="/api/voice?wake=1").status_code == 204
+    r = say(voice_app, device, "Эй, Бася!", path="/api/voice?wake=1")
+    assert r.status_code == 200 and r.headers["X-Listen"] == "1"
+    voice_app.state.llm = FakeLLM("Хорошо.")
+    say(voice_app, device, "Бася, как там мой цветок?", path="/api/voice?wake=1")
+    assert voice_app.state.llm.calls[0][0]["content"].startswith("Ты — Бася")
+
+
+def test_custom_wake_pattern_variants():
+    from app.assistant import wake_pattern
+    p = wake_pattern("Василиса")
+    assert p.match("Василиса, полей") and p.match("асилиса полей") and p.match("Хэй Василиса")
+    assert not p.match("Вчера Василиса звонила")

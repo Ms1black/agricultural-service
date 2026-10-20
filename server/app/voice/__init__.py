@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import safety, store
+from .. import assistant, safety, store
 from ..db import Database
 from ..llm import LLMError
 from ..llm.context import build_messages
@@ -25,9 +25,8 @@ WATER = re.compile(r"\b(пол[еи]й|полить|поливай|полейт�
 STATUS = re.compile(r"(как\s+(?:там|дела|себя|поживает|он|она|оно|мой|моя|цвет)|что\s+с\s+"
                     r"|состояни|расскажи|влажн|сух|пора\s+поли|когда\s+поли)", re.I)
 
-# V3: обращение «Джарвис» в начале фразы (с «эй/хэй» или без; Whisper иногда теряет начало)
-WAKE_WORD = re.compile(r"^\W*(?:(?:эй|хэй|хей|хе|хай|hey|ай)\W*)?"
-                       r"(?:джарвис|джервис|jarvis|жарвис|дарвис|чарвис|\w{0,2}арвис)\b\W*", re.I)
+# V3: обращение по имени помощника в начале фразы (по умолчанию «Джарвис», меняется в вебе)
+WAKE_WORD = assistant.wake_pattern(assistant.DEFAULT_NAME)
 LISTEN_ANSWER = "Слушаю."
 # Подряд много фраз без обращения (телевизор, разговор) — устройство просим подождать
 WAKE_MAX_MISSES = 6
@@ -52,9 +51,9 @@ class VoiceResult:
     listen: bool = False      # прозвучало только «Джарвис» — устройство слушает вопрос
 
 
-def wake_rest(text: str) -> str | None:
-    """Текст после обращения «Джарвис» или None, если обращения в начале нет."""
-    m = WAKE_WORD.match(text)
+def wake_rest(text: str, name: str = assistant.DEFAULT_NAME) -> str | None:
+    """Текст после обращения по имени или None, если обращения в начале нет."""
+    m = assistant.wake_pattern(name).match(text)
     return text[m.end():].strip() if m else None
 
 
@@ -69,9 +68,9 @@ def wake_miss(device: str) -> None:
     _misses.setdefault(device, []).append(time.time())
 
 
-def intent(text: str) -> str:
+def intent(text: str, name: str = assistant.DEFAULT_NAME) -> str:
     """water — просьба полить; status — вопрос о растении; chat — всё остальное."""
-    t = WAKE.sub("", text)
+    t = assistant.wake_pattern(name).sub("", WAKE.sub("", text))
     if WATER.search(t) and not re.search(r"\bне\s+пол", t, re.I):
         return "water"
     if STATUS.search(t):
@@ -134,12 +133,15 @@ def handle(db: Database, llm, stt, tts, voice_dir: str, device: str, audio,
     wake=True (V3, «Джарвис» без хлопка): фраза без обращения в начале — None, ничего не пишем;
     только «Джарвис» — ответ «Слушаю.» и listen=True; иначе — обычный ответ на остаток фразы.
     """
+    name = assistant.get_name(db)
+    if hasattr(stt, "assistant_name"):
+        stt.assistant_name = name                 # подсказка распознаванию: имя помощника
     t0 = time.monotonic()
     transcript = stt.transcribe(audio)
     t1 = time.monotonic()
     listen = False
     if wake:
-        rest = wake_rest(transcript)
+        rest = wake_rest(transcript, name)
         if rest is None:
             wake_miss(device)
             return None
@@ -148,7 +150,7 @@ def handle(db: Database, llm, stt, tts, voice_dir: str, device: str, audio,
     if listen:
         kind, answer = "wake", LISTEN_ANSWER
     else:
-        kind = intent(transcript)
+        kind = intent(transcript, name)
         answer = answer_for(db, llm, device, transcript, kind)
     t2 = time.monotonic()
     speech = tts.synthesize(speech_text(answer)) if answer else np.zeros(0, np.float32)

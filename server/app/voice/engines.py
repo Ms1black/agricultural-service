@@ -13,7 +13,7 @@ from .audio import RATE, resample
 SILERO_URL = "https://models.silero.ai/models/tts/ru/v4_ru.pt"
 SILERO_RATE = 24000
 # Подсказка распознаванию: имя помощника и типичные фразы
-PROMPT = "Джарвис, как там мой цветок? Джарвис, полей растение."
+PROMPT = "{name}, как там мой цветок? {name}, полей растение."
 
 
 class VoiceUnavailable(RuntimeError):
@@ -23,6 +23,7 @@ class VoiceUnavailable(RuntimeError):
 class Whisper:
     def __init__(self, model: str, root: Path):
         self.model_name, self.root, self._model = model, root, None
+        self.assistant_name = "Джарвис"
         self._lock = threading.Lock()
 
     def _load(self):
@@ -40,7 +41,8 @@ class Whisper:
         with self._lock:
             model = self._load()
             segments, _ = model.transcribe(audio, language="ru", beam_size=1, vad_filter=True,
-                                           initial_prompt=PROMPT)
+                                           initial_prompt=PROMPT.format(
+                                               name=self.assistant_name))
             return " ".join(s.text.strip() for s in segments).strip()
 
 

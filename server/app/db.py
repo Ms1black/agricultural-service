@@ -137,6 +137,14 @@ MIGRATIONS: list[list[str]] = [
         )""",
         "CREATE INDEX IF NOT EXISTS ix_forecast_log_device_ts ON forecast_log(device, ts)",
     ],
+    # 7 — настройки сервиса (имя голосового помощника и др.)
+    [
+        """CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated REAL NOT NULL
+        )""",
+    ],
 ]
 
 

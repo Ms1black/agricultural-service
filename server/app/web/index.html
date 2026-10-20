@@ -2,213 +2,509 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
 <title>Автополив</title>
+<link rel="icon" id="favicon">
 <style>
-  :root { --bg:#f4f3ee; --ink:#121212; --muted:#696964; --faint:#d2d2cc; --accent:#2f7d4f; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.4 system-ui, sans-serif; }
-  main { max-width:960px; margin:0 auto; padding:16px; }
-  header { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;
-           border-bottom:2px solid var(--ink); padding-bottom:8px; margin-bottom:16px; }
-  h1 { font-size:20px; margin:0; }
-  h2 { font-size:16px; margin:24px 0 8px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:8px; }
-  .cell { border:1px solid var(--faint); border-radius:6px; padding:10px 12px; background:#fff8; }
-  .cell .label { color:var(--muted); font-size:12px; }
-  .cell .value { font-size:28px; font-weight:700; }
-  .cell.alert { background:var(--ink); color:var(--bg); }
-  .cell.alert .label { color:var(--bg); }
-  .muted { color:var(--muted); font-size:13px; }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  button, select, input { font:inherit; padding:6px 10px; border:1px solid var(--ink);
-                          border-radius:4px; background:#fff; }
-  button { cursor:pointer; background:var(--ink); color:var(--bg); }
-  button.ghost { background:#fff; color:var(--ink); }
-  input[type=number] { width:90px; }
-  svg { width:100%; height:220px; background:#fff8; border:1px solid var(--faint); border-radius:6px; }
+  :root {
+    --bg:#000; --surface:#161616; --surface-2:#222; --surface-3:#2c2c2c; --line:#2a2a2a;
+    --text:#f2f2f2; --muted:#9b9b9b; --faint:#666; --accent:#76e238; --accent-wash:#76e2381f;
+    --danger:#ff5a52; --warn:#ffb547; --radius:28px; --radius-sm:16px;
+  }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  html, body { margin:0; background:var(--bg); color:var(--text); }
+  body { font:15px/1.45 "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         -webkit-font-smoothing:antialiased; }
+  button, select, input { font:inherit; color:inherit; }
+  a { color:var(--text); }
+  .wrap { max-width:1240px; margin:0 auto; padding:0 24px; }
+
+  /* ----- шапка ----- */
+  .top { border-bottom:1px solid #111; }
+  .top .wrap { display:flex; align-items:center; justify-content:space-between; gap:16px;
+               min-height:84px; flex-wrap:wrap; padding-top:12px; padding-bottom:12px; }
+  .brand { display:flex; align-items:center; gap:14px; position:relative; }
+  .avatar { width:52px; height:52px; border-radius:14px; background:var(--surface-2);
+            display:grid; place-items:center; flex:none; }
+  .avatar svg { width:38px; height:38px; }
+  .brand .kicker { color:var(--muted); font-size:13px; }
+  .name-btn { background:none; border:0; padding:0; display:flex; align-items:center; gap:8px;
+              font-size:19px; font-weight:600; cursor:pointer; }
+  .name-btn svg { width:16px; height:16px; color:var(--muted); }
+  .top-right { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .pill-select { appearance:none; background:var(--surface-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%239b9b9b' stroke-width='2'%3E%3Cpath d='M2 4l4 4 4-4'/%3E%3C/svg%3E") no-repeat right 14px center;
+                 border:0; border-radius:999px; padding:10px 38px 10px 16px; cursor:pointer;
+                 max-width:260px; }
+  .status { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px;
+            padding:8px 14px; border-radius:999px; background:var(--surface); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--faint); flex:none; }
+  .dot.on { background:var(--accent); box-shadow:0 0 0 4px var(--accent-wash); }
+  .dot.off { background:var(--danger); }
+  .badge { background:var(--text); color:var(--bg); font-size:12px; font-weight:700;
+           padding:4px 10px; border-radius:999px; }
+
+  .popover { position:absolute; top:64px; left:0; z-index:20; background:var(--surface-2);
+             border:1px solid var(--line); border-radius:var(--radius-sm); padding:16px; width:300px;
+             box-shadow:0 20px 50px #000a; }
+  .popover label { display:block; color:var(--muted); font-size:13px; margin-bottom:8px; }
+  .popover .row { margin-top:10px; }
+
+  /* ----- вкладки ----- */
+  .tabs { background:#111; border-bottom:1px solid #161616; }
+  .tabs .wrap { display:flex; gap:6px; overflow-x:auto; padding-top:12px; padding-bottom:12px;
+                scrollbar-width:none; }
+  .tabs .wrap::-webkit-scrollbar { display:none; }
+  .tab { display:flex; align-items:center; gap:10px; white-space:nowrap; border:0; cursor:pointer;
+         background:none; color:var(--muted); padding:12px 18px; border-radius:12px; font-weight:500; }
+  .tab svg { width:18px; height:18px; }
+  .tab:hover { color:var(--text); }
+  .tab.active { background:var(--surface-3); color:var(--text); }
+
+  main.wrap { padding-top:32px; padding-bottom:24px; }
+  .panel { display:none; }
+  .panel.active { display:block; }
+  h2 { font-size:28px; font-weight:600; margin:0 0 20px; letter-spacing:-.01em; }
+  h3 { font-size:20px; font-weight:600; margin:0 0 14px; }
+  .muted { color:var(--muted); font-size:14px; }
+  .small { font-size:13px; }
+
+  /* ----- карточки ----- */
+  .card { background:var(--surface); border-radius:var(--radius); padding:28px; min-width:0; }
+  .grid { display:grid; gap:20px; }
+  .g-hero { grid-template-columns:1.6fr 1fr; }
+  .g-2 { grid-template-columns:1fr 1fr; }
+  .g-side { grid-template-columns:1.6fr 1fr; align-items:start; }
+  .g-tiles { grid-template-columns:repeat(4, 1fr); }
+  .stack { display:grid; gap:20px; }
+  .section { margin-top:20px; }
+
+  .hero-value { font-size:88px; font-weight:600; line-height:1; letter-spacing:-.03em; margin:14px 0; }
+  .hero-value small { font-size:36px; color:var(--muted); font-weight:500; }
+  .hero-row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+  .chip { display:inline-flex; align-items:center; gap:8px; background:var(--surface-2);
+          border-radius:999px; padding:8px 14px; font-size:14px; color:var(--muted); }
+  .chip b { color:var(--text); font-weight:600; }
+  .chip.good .dot { background:var(--accent); }
+  .chip.warn { color:var(--text); }
+  .chip.warn .dot { background:var(--warn); }
+  .chip.bad .dot { background:var(--danger); }
+
+  .jarvis-card { display:flex; flex-direction:column; align-items:center; text-align:center; gap:16px; }
+  .jarvis-big { width:150px; height:150px; animation:bob 2.4s ease-in-out infinite; }
+  @keyframes bob { 50% { transform:translateY(-6px); } }
+  .lid { transform-box:fill-box; transform-origin:top; transform:scaleY(0);
+         animation:blink 4.2s ease-in-out infinite; }
+  .lid.fast { animation-duration:2.6s; }
+  @keyframes blink { 0%, 90%, 100% { transform:scaleY(0); } 95% { transform:scaleY(1); } }
+  @media (prefers-reduced-motion: reduce) { .jarvis-big, .lid { animation:none; } }
+  .speech { background:var(--surface-2); border-radius:var(--radius-sm); padding:14px 18px;
+            position:relative; max-width:340px; }
+  .speech::before { content:""; position:absolute; top:-8px; left:50%; margin-left:-8px; width:16px;
+                    height:16px; background:var(--surface-2); transform:rotate(45deg); border-radius:3px; }
+
+  .tile .label { color:var(--muted); font-size:14px; }
+  .tile .value { font-size:34px; font-weight:600; margin-top:10px; letter-spacing:-.02em;
+                 font-variant-numeric:tabular-nums; }
+  .tile .value small { font-size:18px; color:var(--muted); font-weight:500; }
+  .tile.alert .value { color:var(--danger); }
+
+  /* ----- кнопки и поля ----- */
+  .btn { display:inline-flex; align-items:center; justify-content:center; gap:10px; border:0;
+         border-radius:999px; padding:13px 26px; font-weight:600; cursor:pointer;
+         background:var(--text); color:#000; white-space:nowrap; }
+  .btn svg { width:18px; height:18px; }
+  .btn.dark { background:#000; color:var(--text); }
+  .btn.ghost { background:var(--surface-2); color:var(--text); }
+  .btn.on { background:var(--accent); color:#000; }
+  .btn.rec { background:var(--danger); color:#000; }
+  .btn:disabled { opacity:.5; cursor:default; }
+  .btn.wide { padding:16px 36px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .field { background:var(--surface-2); border-radius:var(--radius-sm); padding:12px 18px; flex:1;
+           min-width:0; }
+  .field label { display:block; color:var(--muted); font-size:13px; }
+  .field input, .field select { width:100%; background:none; border:0; outline:none; padding:4px 0 0;
+                                font-size:16px; }
+  .field select option { background:var(--surface-2); }
+  .field input:focus-visible, .field select:focus-visible { outline:none; }
+  .field:focus-within { box-shadow:0 0 0 2px var(--accent); }
+  input.plain, select.plain { background:#000; border:0; border-radius:14px; padding:14px 18px;
+                              outline:none; min-width:0; }
+  input.num { width:90px; }
+  input:focus-visible, select:focus-visible, button:focus-visible { outline:2px solid var(--accent);
+                                                                     outline-offset:2px; }
+
+  .seg { display:inline-flex; background:var(--surface-2); border-radius:999px; padding:5px; gap:2px;
+         flex-wrap:wrap; }
+  .seg button { border:0; background:none; color:var(--muted); padding:9px 16px; border-radius:999px;
+                cursor:pointer; font-weight:500; }
+  .seg button.active { background:var(--text); color:#000; }
+
+  .note { background:var(--surface-2); border-radius:var(--radius-sm); padding:14px 18px; display:flex;
+          gap:12px; color:var(--muted); font-size:14px; }
+  .note svg { flex:none; width:20px; height:20px; color:var(--text); margin-top:1px; }
+  .note.warn { color:var(--text); }
+  .note.warn svg { color:var(--warn); }
+
+  /* ----- списки (журналы) ----- */
+  .list { display:grid; gap:10px; }
+  .item { border:1px solid var(--line); border-radius:20px; padding:16px 20px; display:flex; gap:14px;
+          align-items:center; justify-content:space-between; flex-wrap:wrap; }
+  .item .main { min-width:0; flex:1; }
+  .item .meta { color:var(--muted); font-size:13px; }
+  .tag { background:var(--surface-2); color:var(--muted); border-radius:999px; padding:6px 12px;
+         font-size:13px; white-space:nowrap; }
+  .tag.water { color:var(--accent); }
+  .tag.blocked { color:var(--warn); }
+  .empty { color:var(--faint); padding:8px 0; }
+
+  /* ----- чат ----- */
+  .chat-log { display:flex; flex-direction:column; gap:10px; max-height:440px; overflow-y:auto;
+              margin-bottom:16px; }
+  .chat-log:empty::before { content:attr(data-empty); color:var(--faint); }
+  .bubble { padding:12px 16px; border-radius:18px; max-width:85%; white-space:pre-wrap;
+            overflow-wrap:anywhere; }
+  .bubble.user { align-self:flex-end; background:var(--text); color:#000; border-bottom-right-radius:6px; }
+  .bubble.assistant { align-self:flex-start; background:var(--surface-2); border-bottom-left-radius:6px; }
+  .who { font-size:12px; color:var(--muted); margin-bottom:2px; }
+
+  /* ----- графики ----- */
+  .chart-head { display:flex; justify-content:space-between; gap:16px; align-items:center;
+                flex-wrap:wrap; margin-bottom:14px; }
+  .chart-box { position:relative; }
+  svg.chart { width:100%; height:300px; display:block; overflow:visible; }
+  svg.small { height:190px; }
+  .legend { display:flex; gap:18px; flex-wrap:wrap; color:var(--muted); font-size:13px; margin-top:12px; }
+  .legend span { display:inline-flex; align-items:center; gap:8px; }
+  .key { width:18px; height:0; border-top:2px solid var(--text); display:inline-block; }
+  .key.dash { border-top:2px dashed var(--accent); }
+  .key.band { height:10px; border:0; background:var(--accent-wash); border-radius:2px; }
+  .key.mark { width:8px; height:8px; border:0; background:var(--accent); border-radius:2px; }
+  .key.limit { border-top:1px dashed var(--danger); }
+  .tip { position:absolute; pointer-events:none; background:var(--surface-3); border-radius:12px;
+         padding:8px 12px; font-size:13px; white-space:nowrap; transform:translate(-50%, -110%);
+         box-shadow:0 10px 30px #000a; display:none; }
+  .tip b { font-size:15px; }
+
   table { width:100%; border-collapse:collapse; font-size:14px; }
-  td, th { text-align:left; padding:4px 6px; border-bottom:1px solid var(--faint); }
-  #msg { min-height:1.4em; }
-  #chat-log { border:1px solid var(--faint); border-radius:6px; background:#fff8; padding:8px 12px;
-              max-height:320px; overflow-y:auto; }
-  #chat-log:empty { display:none; }
-  .bubble { margin:6px 0; white-space:pre-wrap; }
-  .bubble.user { color:var(--muted); }
-  .bubble.user::before { content:'Вы: '; font-weight:700; }
-  .bubble.assistant::before { content:'Джарвис: '; font-weight:700; }
-  #chat-form { margin-top:8px; }
-  #voice-log .item { border-bottom:1px solid var(--faint); padding:6px 0; }
-  #voice-log .meta { color:var(--muted); font-size:12px; }
-  button.on { background:var(--accent); border-color:var(--accent); }
-  button.rec { background:#c44; border-color:#c44; }
-  .steps { display:flex; gap:4px; margin:8px 0; }
-  .steps div { flex:1; text-align:center; padding:6px 4px; border:1px solid var(--faint);
-               border-radius:4px; font-size:13px; color:var(--muted); }
-  .steps div.done { background:var(--ink); color:var(--bg); border-color:var(--ink); }
-  .steps div.now { border:2px solid var(--ink); color:var(--ink); font-weight:700; }
-  #cal-hint { font-weight:600; }
-  #cal-hint.warn { color:#c44; }
-  details summary { cursor:pointer; color:var(--muted); margin:8px 0; }
-  #chat-input { flex:1; min-width:180px; }
-  .two { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px; }
-  .card { border:1px solid var(--faint); border-radius:6px; padding:10px 12px; background:#fff8; }
-  .card h3 { font-size:14px; margin:0 0 6px; }
-  svg.small { height:150px; }
+  th { text-align:left; color:var(--muted); font-weight:500; padding:10px 8px; border-bottom:1px solid var(--line); }
+  td { padding:12px 8px; border-bottom:1px solid var(--line); }
   td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
-  tr.best td { font-weight:700; }
-  #source-note { color:var(--accent); }
+  td.hi { color:var(--accent); font-weight:600; }
   .table-wrap { overflow-x:auto; }
-  /* Режим записи экрана: ?present=1 — крупно, без служебных элементов */
-  body.present { font-size:18px; }
-  body.present main { max-width:1200px; }
-  body.present .cell .value { font-size:40px; }
-  body.present svg { height:300px; }
-  body.present svg.small { height:200px; }
-  body.present [data-service] { display:none !important; }
-  /* Открытый датасет — только данные и модель; блоки устройства скрыты */
+
+  .steps { display:grid; grid-template-columns:repeat(5, 1fr); gap:6px; margin:4px 0 16px; }
+  .steps div { text-align:center; padding:10px 6px; border-radius:12px; background:var(--surface-2);
+               color:var(--faint); font-size:13px; }
+  .steps div.done { background:var(--accent-wash); color:var(--accent); }
+  .steps div.now { background:var(--text); color:#000; font-weight:600; }
+  details summary { cursor:pointer; color:var(--muted); margin:16px 0 8px; }
+
+  footer { border-top:1px solid var(--line); margin-top:40px; }
+  footer .wrap { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; padding-top:24px;
+                 padding-bottom:32px; color:var(--faint); font-size:13px; }
+  #msg { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:var(--text);
+         color:#000; padding:12px 20px; border-radius:999px; font-weight:500; z-index:30; display:none;
+         max-width:calc(100vw - 32px); }
+
+  /* ----- открытый датасет и запись экрана ----- */
   body.demo [data-device] { display:none !important; }
+  body.present .tabs, body.present [data-service], body.present .top-right select { display:none !important; }
+  body.present .panel[data-present] { display:block; margin-bottom:40px; }
+  body.present { font-size:17px; }
+  body.present svg.chart { height:380px; }
+
+  /* ----- телефон ----- */
+  @media (max-width: 960px) {
+    .g-hero, .g-side, .g-2 { grid-template-columns:1fr; }
+    .g-tiles { grid-template-columns:repeat(2, 1fr); }
+  }
+  @media (max-width: 640px) {
+    .wrap { padding:0 16px; }
+    .card { padding:20px; border-radius:22px; }
+    h2 { font-size:24px; }
+    main.wrap { padding-top:20px; }
+    .hero-value { font-size:64px; }
+    .tile .value { font-size:24px; }
+    .tile .label { font-size:13px; }
+    .chart-head .seg { flex-wrap:nowrap; overflow-x:auto; max-width:100%; scrollbar-width:none; }
+    .seg button { padding:8px 12px; white-space:nowrap; }
+    .grid, .stack { gap:12px; }
+    .section { margin-top:12px; }
+    .top-right { width:100%; }
+    .pill-select { flex:1; max-width:none; }
+    .tab { padding:10px 14px; }
+    .tab svg { display:none; }
+    svg.chart { height:230px; }
+    .steps { grid-template-columns:repeat(5, minmax(0, 1fr)); }
+    .steps div { font-size:11px; padding:8px 2px; }
+    .btn { padding:12px 20px; }
+    .jarvis-big { width:120px; height:120px; }
+  }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <h1>Автополив <span id="demo-badge" hidden
-        style="background:var(--ink);color:var(--bg);font-size:13px;padding:2px 6px;border-radius:3px;
-        vertical-align:middle">DEMO</span></h1>
-    <div class="row">
-      <label>Данные <select id="device"><option value="plant1">устройство plant1</option></select></label>
-      <span id="online" class="muted"></span>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <div class="avatar" id="avatar"></div>
+      <div>
+        <div class="kicker">Помощник растения</div>
+        <button class="name-btn" id="name-btn" aria-haspopup="dialog" aria-expanded="false">
+          <span id="assistant-name">Джарвис</span>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6l5 5 5-5"/></svg>
+        </button>
+      </div>
+      <div class="popover" id="name-pop" hidden role="dialog" aria-label="Имя помощника">
+        <label for="name-input">Имя помощника — на него он откликается голосом</label>
+        <input class="plain" id="name-input" maxlength="20" autocomplete="off" style="width:100%">
+        <div class="row">
+          <button class="btn" id="name-save">Сохранить</button>
+          <button class="btn ghost" id="name-reset">По умолчанию</button>
+        </div>
+        <p class="muted small" id="name-msg" style="margin:10px 0 0"></p>
+      </div>
     </div>
-  </header>
-
-  <div class="grid">
-    <div class="cell" id="c-soil"><div class="label">Почва, %</div><div class="value" id="soil">--</div></div>
-    <div class="cell"><div class="label">Температура, °C</div><div class="value" id="temp">--</div></div>
-    <div class="cell"><div class="label">Влажность воздуха, %</div><div class="value" id="hum">--</div></div>
-    <div class="cell"><div class="label">Последний полив</div><div class="value" id="watered">--</div></div>
-    <div class="cell"><div class="label">Следующий полив</div><div class="value" id="next">--</div></div>
-    <div class="cell" id="c-status"><div class="label">Устройство</div><div class="value" id="status">--</div></div>
-  </div>
-  <p class="muted" id="raw"></p>
-  <p class="muted" id="source-note" hidden></p>
-
-  <h2>Влажность почвы</h2>
-  <div class="row">
-    <select id="hours">
-      <option value="6">6 ч</option><option value="24" selected>24 ч</option>
-      <option value="72">3 дня</option><option value="168">7 дней</option>
-      <option value="87600">всё время</option>
-    </select>
-    <span class="muted">Отметки сверху — поливы (наведите — причина); пунктир — прогноз ИИ.</span>
-  </div>
-  <svg id="chart" viewBox="0 0 900 220" preserveAspectRatio="none"></svg>
-  <p class="muted" id="fc-note"></p>
-
-  <h2>Модель прогноза</h2>
-  <p class="muted" id="model-note">Модель ещё не обучена.</p>
-  <div class="two">
-    <div class="card">
-      <h3>Ошибка времени до порога, ч (меньше — лучше)</h3>
-      <svg id="model-bars" class="small" viewBox="0 0 400 150" preserveAspectRatio="none"></svg>
-    </div>
-    <div class="card">
-      <h3>Адаптация под своё растение: ошибка от числа своих циклов, ч</h3>
-      <svg id="adapt-curve" class="small" viewBox="0 0 400 150" preserveAspectRatio="none"></svg>
+    <div class="top-right">
+      <span class="badge" id="demo-badge" hidden>DEMO</span>
+      <div class="status"><span class="dot" id="online-dot"></span><span id="online">загрузка…</span></div>
+      <select class="pill-select" id="device" aria-label="Источник данных">
+        <option value="plant1">устройство plant1</option>
+      </select>
     </div>
   </div>
-  <div class="table-wrap"><table><thead><tr><th>Метрика</th><th class="num">Модель</th>
-    <th class="num">Persistence</th><th class="num">Линейная 6 ч</th><th class="num">Средняя скорость</th>
-  </tr></thead><tbody id="model-table"></tbody></table></div>
-  <p class="muted" id="model-monitor"></p>
-  <details data-service><summary>История версий модели</summary>
-    <div class="table-wrap"><table><thead><tr><th>Версия</th><th>Рабочая</th><th class="num">До порога, ч</th>
-      <th class="num">MAE 6 ч</th><th>Данные</th></tr></thead><tbody id="model-history"></tbody></table></div>
-  </details>
+</header>
 
-  <h2>Политика полива: порог против ИИ</h2>
-  <p class="muted">Офлайн-симуляция на реальных кривых высыхания открытых датасетов (метрики 6.4).</p>
-  <div class="table-wrap"><table><thead><tr><th>Метрика</th><th class="num">По порогу</th>
-    <th class="num">По прогнозу ИИ</th></tr></thead><tbody id="policy-table"></tbody></table></div>
-
-  <section data-device>
-  <h2>Спросить ИИ о растении</h2>
-  <div id="chat-log"></div>
-  <form id="chat-form" class="row" data-service>
-    <input id="chat-input" placeholder="Например: как там мой цветок?" maxlength="500" autocomplete="off">
-    <button id="chat-send">Спросить</button>
-    <button type="button" class="ghost" id="why">Почему полили?</button>
-  </form>
-  <p id="chat-msg" class="muted"></p>
-
-  <h2>Голосовой помощник «Джарвис»</h2>
-  <div class="row">
-    <button id="sound" class="ghost">Включить звук</button>
-    <button id="talk">Говорить</button>
-    <span id="voice-msg" class="muted"></span>
+<nav class="tabs" aria-label="Разделы">
+  <div class="wrap" id="tabs">
+    <button class="tab active" data-tab="overview">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg>
+      Обзор</button>
+    <button class="tab" data-tab="assistant" data-device>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.5A8 8 0 1 1 21 12z"/></svg>
+      <span class="tab-name">Джарвис</span></button>
+    <button class="tab" data-tab="model">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 20h18M6 16V9M11 16V5M16 16v-5M21 16v-3"/></svg>
+      ИИ-прогноз</button>
+    <button class="tab" data-tab="water" data-device>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/></svg>
+      Полив</button>
+    <button class="tab" data-tab="log" data-device>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+      Журнал</button>
   </div>
-  <p class="muted">Ответы на фразы, сказанные устройству, звучат здесь, если звук включён.</p>
-  <div id="voice-log"></div>
+</nav>
 
-  <h2 data-service>Полив</h2>
-  <div class="row" data-service>
-    <input type="number" id="seconds" min="1" max="10" value="3"> с
-    <button id="water">Полить</button>
-    <span class="muted">Команда уйдёт с ближайшей телеметрией (до 30 с), действует 2 мин.</span>
-  </div>
-
-  <h2>Режим полива</h2>
-  <div class="row" data-service>
-    <select id="mode">
-      <option value="threshold">По порогу 30 % (решает устройство)</option>
-      <option value="ml">По прогнозу ИИ (решает сервер)</option>
-    </select>
-    <span id="mode-msg" class="muted"></span>
-  </div>
-  <h2>Журнал решений</h2>
-  <table><thead><tr><th>Время</th><th>Решение</th><th>Причина</th></tr></thead>
-    <tbody id="decisions"></tbody></table>
-
-  <h2>Калибровка под растение</h2>
-  <div class="steps" id="cal-steps">
-    <div>0. Профиль</div><div>1. Датчик</div><div>2. Доза</div><div>3. Высыхание</div><div>Готово</div>
-  </div>
-  <p id="cal-hint"></p>
-  <div class="row" data-service>
-    <select id="cal-type"></select>
-    <input type="number" id="cal-low" min="0" max="100" title="нижняя граница, %"> –
-    <input type="number" id="cal-high" min="0" max="100" title="верхняя граница, %"> %
-    <button class="ghost" id="cal-profile">Выбрать</button>
-    <button class="ghost" id="cal-mark-dry">Сухо</button>
-    <button class="ghost" id="cal-mark-wet">Пролил</button>
-    <button class="ghost" id="cal-confirm" hidden>Подтвердить: насос в порядке</button>
-  </div>
-  <table><tbody id="cal-params"></tbody></table>
-  <p class="muted" id="cal-anomalies"></p>
-  <details data-service>
-    <summary>Ручная калибровка датчика и сброс</summary>
-    <div class="row">
-      Сухо <input type="number" id="dry" min="0" max="4095">
-      Мокро <input type="number" id="wet" min="0" max="4095">
-      <button id="cal-save">Сохранить</button>
-      <button class="ghost" id="cal-dry">Сейчас сухо</button>
-      <button class="ghost" id="cal-wet">Только что полили</button>
-      <button class="ghost" id="cal-reset">Начать калибровку заново</button>
+<main class="wrap">
+  <!-- ===== Обзор ===== -->
+  <section class="panel active" data-panel="overview" data-present>
+    <div class="grid g-hero">
+      <div class="card">
+        <div class="muted">Влажность почвы</div>
+        <div class="hero-value"><span id="soil">--</span><small> %</small></div>
+        <div class="hero-row">
+          <span class="chip" id="soil-chip"><span class="dot"></span><span id="soil-state">нет данных</span></span>
+          <span class="chip">Следующий полив <b id="next">--</b></span>
+        </div>
+        <p class="muted small" id="raw" style="margin:16px 0 0"></p>
+      </div>
+      <div class="card jarvis-card">
+        <div class="jarvis-big" id="jarvis-big"></div>
+        <div class="speech" id="jarvis-says">Привет! Загружаю данные…</div>
+        <button class="btn ghost" data-go="assistant" data-device data-service>Спросить <span class="assistant-name-acc">Джарвиса</span></button>
+      </div>
     </div>
-  </details>
-  <p id="msg" class="muted"></p>
 
+    <div class="grid g-tiles section">
+      <div class="card tile"><div class="label">Температура</div><div class="value"><span id="temp">--</span><small> °C</small></div></div>
+      <div class="card tile"><div class="label">Влажность воздуха</div><div class="value"><span id="hum">--</span><small> %</small></div></div>
+      <div class="card tile"><div class="label">Последний полив</div><div class="value" id="watered">--</div></div>
+      <div class="card tile" id="c-status"><div class="label">Устройство</div><div class="value" id="status">--</div></div>
+    </div>
+
+    <div class="card section">
+      <div class="chart-head">
+        <h3 style="margin:0">Влажность почвы и прогноз</h3>
+        <div class="seg" id="hours-seg" role="group" aria-label="Период" data-service>
+          <button data-hours="6">6 ч</button><button data-hours="24" class="active">24 ч</button>
+          <button data-hours="72">3 дня</button><button data-hours="168">7 дней</button>
+          <button data-hours="87600">всё время</button>
+        </div>
+      </div>
+      <div class="chart-box" id="chart-box">
+        <svg class="chart" id="chart" role="img"
+             aria-label="График влажности почвы"></svg>
+        <div class="tip" id="tip"></div>
+      </div>
+      <div class="legend">
+        <span><i class="key"></i>факт</span><span><i class="key dash"></i>прогноз ИИ</span>
+        <span><i class="key band"></i>целевой диапазон</span><span><i class="key limit"></i>порог полива</span>
+        <span><i class="key mark"></i>полив</span>
+      </div>
+      <p class="muted small" id="fc-note" style="margin:14px 0 0"></p>
+      <p class="muted small" id="source-note" hidden style="margin:8px 0 0;color:var(--accent)"></p>
+    </div>
   </section>
-  <h2 data-service>События</h2>
-  <div class="table-wrap" data-service><table><thead><tr><th>Время</th><th>Тип</th><th>Значение</th>
-    <th>Причина</th></tr></thead><tbody id="events"></tbody></table></div>
 
-  <h2 data-service>Данные</h2>
-  <div class="row" data-service>
-    <a href="web/api/export.csv?table=measurements">measurements.csv</a>
-    <a href="web/api/export.csv?table=events">events.csv</a>
-  </div>
+  <!-- ===== Помощник ===== -->
+  <section class="panel" data-panel="assistant">
+    <h2>Спросить <span class="assistant-name-acc">Джарвиса</span></h2>
+    <div class="grid g-side">
+      <div class="card">
+        <div class="chat-log" id="chat-log" data-empty="Спросите про растение — ответ будет по данным датчиков и прогнозу."></div>
+        <form id="chat-form" class="row">
+          <div class="field" style="flex:1 1 260px">
+            <label for="chat-input">Вопрос</label>
+            <input id="chat-input" placeholder="Как там мой цветок?" maxlength="500" autocomplete="off">
+          </div>
+          <div class="row">
+            <button class="btn" id="chat-send">Спросить</button>
+            <button type="button" class="btn dark" id="why">Почему полили?</button>
+          </div>
+        </form>
+        <p class="muted small" id="chat-msg" style="margin:10px 0 0"></p>
+      </div>
+      <div class="stack">
+        <div class="card">
+          <h3>Голос</h3>
+          <p class="muted" style="margin-top:0">Скажите устройству «<span class="assistant-name-plain">Джарвис</span>, как там мой цветок?» — ответ прозвучит здесь, если звук включён.</p>
+          <div class="row">
+            <button class="btn" id="sound">Включить звук</button>
+            <button class="btn ghost" id="talk">Говорить в микрофон</button>
+          </div>
+          <p class="muted small" id="voice-msg" style="margin:12px 0 0"></p>
+        </div>
+        <div class="note">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          <span>Помощник не управляет насосом напрямую: «полей» — это просьба, она проходит те же проверки безопасности, что и любой полив.</span>
+        </div>
+      </div>
+    </div>
+    <h3 class="section" style="margin-top:32px">Разговоры голосом</h3>
+    <div class="list" id="voice-log"></div>
+  </section>
+
+  <!-- ===== Модель ===== -->
+  <section class="panel" data-panel="model" data-present>
+    <h2>ИИ-прогноз высыхания</h2>
+    <p class="muted" id="model-note" style="max-width:820px">Модель ещё не обучена.</p>
+    <div class="grid g-2 section">
+      <div class="card">
+        <h3>Ошибка «когда полить», часы</h3>
+        <p class="muted small" style="margin-top:-8px">Меньше — лучше. Проверка на 30 % истории, которую модель не видела.</p>
+        <svg class="chart small" id="model-bars"></svg>
+      </div>
+      <div class="card">
+        <h3>Подстройка под своё растение</h3>
+        <p class="muted small" style="margin-top:-8px">Ошибка в часах от числа своих циклов полив → высыхание.</p>
+        <svg class="chart small" id="adapt-curve"></svg>
+      </div>
+    </div>
+    <div class="card section">
+      <h3>Метрики против простых способов</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Метрика</th><th class="num">ИИ</th><th class="num">Без изменений</th>
+          <th class="num">Линейно 6 ч</th><th class="num">Средняя скорость</th></tr></thead>
+        <tbody id="model-table"></tbody></table></div>
+      <p class="muted small" id="model-monitor" style="margin:14px 0 0"></p>
+    </div>
+    <div class="card section">
+      <h3>Полив по порогу против полива по ИИ</h3>
+      <p class="muted small" style="margin-top:-8px">Симуляция на реальных кривых высыхания открытых датасетов.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Метрика</th><th class="num">По порогу</th><th class="num">По прогнозу ИИ</th></tr></thead>
+        <tbody id="policy-table"></tbody></table></div>
+    </div>
+    <details data-service>
+      <summary>История версий модели</summary>
+      <div class="list" id="model-history"></div>
+    </details>
+  </section>
+
+  <!-- ===== Полив ===== -->
+  <section class="panel" data-panel="water">
+    <h2>Полив</h2>
+    <div class="grid g-side">
+      <div class="card">
+        <h3>Режим</h3>
+        <div class="seg" id="mode-seg" role="group" aria-label="Режим полива">
+          <button data-mode="threshold">По порогу 30 %</button>
+          <button data-mode="ml">По прогнозу ИИ</button>
+        </div>
+        <p class="muted" id="mode-msg" style="margin:14px 0 0"></p>
+      </div>
+      <div class="card">
+        <h3>Полить сейчас</h3>
+        <div class="row">
+          <div class="field" style="flex:0 0 120px"><label for="seconds">Секунд</label>
+            <input type="number" id="seconds" min="1" max="10" value="3"></div>
+          <button class="btn wide" id="water">Полить</button>
+        </div>
+        <p class="muted small" style="margin:12px 0 0">Команда уйдёт с ближайшей телеметрией (до 30 с), действует 2 мин.</p>
+      </div>
+    </div>
+
+    <div class="card section">
+      <h3>Калибровка под растение</h3>
+      <div class="steps" id="cal-steps">
+        <div>0 · Профиль</div><div>1 · Датчик</div><div>2 · Доза</div><div>3 · Высыхание</div><div>Готово</div>
+      </div>
+      <div class="note" id="cal-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></svg>
+        <span id="cal-hint"></span>
+      </div>
+      <div class="row section">
+        <div class="field" style="flex:2 1 220px"><label for="cal-type">Тип растения</label>
+          <select id="cal-type"></select></div>
+        <div class="field" style="flex:0 0 110px"><label for="cal-low">От, %</label>
+          <input type="number" id="cal-low" min="0" max="100"></div>
+        <div class="field" style="flex:0 0 110px"><label for="cal-high">До, %</label>
+          <input type="number" id="cal-high" min="0" max="100"></div>
+        <button class="btn ghost" id="cal-profile">Выбрать</button>
+        <button class="btn" id="cal-mark-dry">Сухо</button>
+        <button class="btn" id="cal-mark-wet">Пролил</button>
+        <button class="btn" id="cal-confirm" hidden>Насос в порядке</button>
+      </div>
+      <div class="table-wrap section"><table><tbody id="cal-params"></tbody></table></div>
+      <p class="muted small" id="cal-anomalies"></p>
+      <details>
+        <summary>Ручная калибровка датчика и сброс</summary>
+        <div class="row">
+          <div class="field" style="flex:0 0 130px"><label for="dry">Сухо, raw</label><input type="number" id="dry" min="0" max="4095"></div>
+          <div class="field" style="flex:0 0 130px"><label for="wet">Мокро, raw</label><input type="number" id="wet" min="0" max="4095"></div>
+          <button class="btn ghost" id="cal-save">Сохранить</button>
+          <button class="btn ghost" id="cal-dry">Сейчас сухо</button>
+          <button class="btn ghost" id="cal-wet">Только что полили</button>
+          <button class="btn dark" id="cal-reset" style="color:var(--danger)">Начать заново</button>
+        </div>
+      </details>
+    </div>
+
+    <h3 class="section" style="margin-top:32px">Решения сервера</h3>
+    <div class="list" id="decisions"></div>
+  </section>
+
+  <!-- ===== Журнал ===== -->
+  <section class="panel" data-panel="log">
+    <h2>Журнал</h2>
+    <div class="list" id="events"></div>
+    <div class="row section">
+      <a class="btn ghost" href="web/api/export.csv?table=measurements">Скачать измерения CSV</a>
+      <a class="btn ghost" href="web/api/export.csv?table=events">Скачать события CSV</a>
+    </div>
+  </section>
 </main>
+
+<footer>
+  <div class="wrap">
+    <span>Автополив — уход за растением с ИИ</span>
+    <span>Прогноз: открытые датасеты + своё растение · Безопасность полива — в коде</span>
+  </div>
+</footer>
+<div id="msg" role="status"></div>
+
 <script>
 const $ = id => document.getElementById(id);
 const PRESENT = new URLSearchParams(location.search).get('present') === '1';
@@ -218,18 +514,50 @@ const isDemo = () => $('device').value.startsWith('demo:');
 const dev = () => isDemo() ? 'plant1' : $('device').value;
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;',
                                                             '"':'&quot;', "'":'&#39;' })[c]);
-const fmtTime = ts => new Date(ts * 1000).toLocaleString('ru-RU');
-const NOTES = { auto:'авто (порог)', 'auto-D0':'авто (D0)', claps:'хлопки', web:'кнопка на сайте',
+const fmtTime = ts => new Date(ts * 1000).toLocaleString('ru-RU', { day:'numeric', month:'short',
+                                                                     hour:'2-digit', minute:'2-digit' });
+const NOTES = { auto:'по порогу', 'auto-D0':'по порогу (D0)', claps:'хлопки', web:'кнопка на сайте',
                 manual:'вручную', voice:'голос', ml:'прогноз ИИ', calib:'калибровка', start:'запуск',
                 inferred:'найден по росту влажности', dataset:'из датасета' };
+const EVENTS = { water:'Полив', boot:'Запуск', anomaly:'Аномалия', anomaly_confirmed:'Аномалия снята' };
 let calib = null;              // последняя калибровка — для линий диапазона на графике
+let tab = 'overview';
+let assistantName = 'Джарвис';
+let lastState = null, lastForecast = null;
+
+// ----- персонаж (тот же спрайт, что на экране устройства) -----
+const SPRITE = ["........aa.....", ".......aa......", ".......a.......", "....bbbabb.....",
+  "...cddddddb....", "..cdddddddcb...", ".cdddddddddcc..", "cddddddddddddc.", "cddaefaaefaddc.",
+  "cddaffaaffaddc.", "cddgddddddgdddc", "bdddddddddddddc", "bddddddddddddc.", ".bddddddddddcc.",
+  "..bbaa..aabc..."];
+const PAL = { a:'#79ff31', b:'#5bad25', c:'#74cb3a', d:'#76e238', e:'#fff', f:'#000', g:'#fbacd4' };
+// blink: веки (цвет кожи) плавно опускаются на глаза; fast — чаще, во время полива
+function jarvisSVG(blink = false, fast = false) {
+  let r = '';
+  SPRITE.forEach((row, j) => [...row].forEach((ch, i) => {
+    if (ch !== '.') r += `<rect x="${i}" y="${j}" width="1.02" height="1.02" fill="${PAL[ch]}"/>`;
+  }));
+  if (blink) r += [4, 8].map(x => `<rect class="lid${fast ? ' fast' : ''}" x="${x}" y="8" width="2"
+                   height="2" fill="${PAL.d}"/>`).join('');
+  return `<svg viewBox="0 0 15 15" shape-rendering="crispEdges" aria-hidden="true">${r}</svg>`;
+}
+$('avatar').innerHTML = jarvisSVG();
+$('jarvis-big').innerHTML = jarvisSVG(true);
+(() => {   // значок вкладки
+  const c = document.createElement('canvas'); c.width = c.height = 30;
+  const g = c.getContext('2d');
+  SPRITE.forEach((row, j) => [...row].forEach((ch, i) => {
+    if (ch !== '.') { g.fillStyle = PAL[ch]; g.fillRect(i * 2, j * 2, 2, 2); }
+  }));
+  $('favicon').href = c.toDataURL();
+})();
 
 function ago(sec) {
   const m = Math.floor(sec / 60);
   if (m < 1) return 'сейчас';
-  if (m < 60) return m + ' мин';
-  if (m < 48 * 60) return Math.floor(m / 60) + ' ч';
-  return Math.floor(m / 1440) + ' дн';
+  if (m < 60) return m + ' мин назад';
+  if (m < 48 * 60) return Math.floor(m / 60) + ' ч назад';
+  return Math.floor(m / 1440) + ' дн назад';
 }
 
 async function api(path, body) {
@@ -240,8 +568,70 @@ async function api(path, body) {
   return data;
 }
 
-function say(text) { $('msg').textContent = text; }
+let msgTimer;
+function say(text) {
+  const m = $('msg'); m.textContent = text; m.style.display = 'block';
+  clearTimeout(msgTimer); msgTimer = setTimeout(() => { m.style.display = 'none'; }, 4000);
+}
 
+// ----- вкладки -----
+function showTab(name) {
+  tab = name;
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.dataset.panel === name));
+  try { localStorage.setItem('tab', name); } catch (e) {}
+  if (name === 'assistant') $('chat-input').focus({ preventScroll: true });
+  // скрытые вкладки не знают своей ширины — перерисовать графики при показе
+  if (name === 'model' && typeof loadModel === 'function') loadModel().catch(() => {});
+  if (name === 'overview' && typeof lastDraw !== 'undefined' && lastDraw) setTimeout(() => _drawChart(...lastDraw));
+}
+document.querySelectorAll('.tab').forEach(b => b.onclick = () => showTab(b.dataset.tab));
+document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => showTab(b.dataset.go));
+// /#model, /#water … — ссылка на вкладку; иначе — последняя открытая
+const TABS = ['overview', 'assistant', 'model', 'water', 'log'];
+try {
+  const t = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : localStorage.getItem('tab');
+  if (t && !PRESENT) showTab(t);
+} catch (e) {}
+window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (TABS.includes(t)) showTab(t); });
+
+// ----- имя помощника -----
+function genitive(name) {      // «Спросить Джарвиса»: простое склонение, иначе — как есть
+  if (/[бвгджзклмнпрстфхцчшщ]$/i.test(name)) return name + 'а';
+  if (/а$/i.test(name)) return name.slice(0, -1) + 'у';
+  if (/я$/i.test(name)) return name.slice(0, -1) + 'ю';
+  return name;
+}
+function applyName(name) {
+  assistantName = name;
+  $('assistant-name').textContent = name;
+  document.querySelectorAll('.tab-name, .assistant-name-plain').forEach(e => e.textContent = name);
+  document.querySelectorAll('.assistant-name-acc').forEach(e => e.textContent = genitive(name));
+}
+async function loadName() {
+  try { applyName((await api('web/api/assistant')).name); } catch (e) {}
+}
+$('name-btn').onclick = () => {
+  const pop = $('name-pop'), open = pop.hidden;
+  pop.hidden = !open; $('name-btn').setAttribute('aria-expanded', open);
+  if (open) { $('name-input').value = assistantName; $('name-input').select(); $('name-msg').textContent = ''; }
+};
+async function saveName(name) {
+  try {
+    const r = await api('web/api/assistant', { name });
+    applyName(r.name); $('name-pop').hidden = true;
+    say(`Теперь помощника зовут «${r.name}» — на это имя он откликается голосом`);
+  } catch (e) { $('name-msg').textContent = e.message; }
+}
+$('name-save').onclick = () => saveName($('name-input').value);
+$('name-input').onkeydown = e => { if (e.key === 'Enter') saveName($('name-input').value);
+                                   if (e.key === 'Escape') $('name-pop').hidden = true; };
+$('name-reset').onclick = () => saveName('Джарвис');
+document.addEventListener('click', e => {
+  if (!$('name-pop').hidden && !e.target.closest('.brand')) $('name-pop').hidden = true;
+});
+
+// ----- источник данных -----
 async function loadDevices() {
   const [list, demo] = await Promise.all([api('web/api/devices'),
                                           api('web/api/demo/series').catch(() => [])]);
@@ -254,35 +644,82 @@ async function loadDevices() {
   if ([...$('device').options].some(o => o.value === cur)) $('device').value = cur;
 }
 
+// ----- реплика персонажа по состоянию -----
+function jarvisMood(soil, low, high, pending, hours) {
+  let text, watering = false;
+  if (pending) { text = `Ух, поливают! ${pending.seconds} с воды уже в пути.`; watering = true; }
+  else if (soil == null) text = 'Жду данных с датчика…';
+  else if (soil < low) text = `Пить хочу! Почва ${Math.round(soil)} % — ниже нормы.`;
+  else if (soil > high) text = `Мне пока хватает воды: ${Math.round(soil)} %.`;
+  else if (hours != null && hours < 6) text = `Почва ${Math.round(soil)} %. Скоро попрошу воды — примерно через ${Math.max(1, Math.round(hours))} ч.`;
+  else text = `Всё хорошо: почва ${Math.round(soil)} %.` + (hours != null && hours < 24 * 14 ? ` Следующий полив ${inText(hours)}.` : '');
+  $('jarvis-says').textContent = text;
+  const html = jarvisSVG(true, watering);
+  if ($('jarvis-big').dataset.state !== String(watering)) {   // не перезапускать анимацию каждые 15 с
+    $('jarvis-big').innerHTML = html; $('jarvis-big').dataset.state = String(watering);
+  }
+}
+
+function setSoilState(soil, low, high) {
+  const chip = $('soil-chip'); chip.className = 'chip';
+  if (soil == null) { $('soil-state').textContent = 'нет данных'; return; }
+  if (soil < low) { chip.classList.add('bad'); $('soil-state').textContent = 'суховато'; }
+  else if (soil > high) { chip.classList.add('warn'); $('soil-state').textContent = 'влажно'; }
+  else { chip.classList.add('good'); $('soil-state').textContent = 'в норме'; }
+}
+
+const range = () => [calib && calib.target_low != null ? calib.target_low : 30,
+                     calib && calib.target_high != null ? Math.min(calib.target_high, 70) : 70];
+
 async function loadState() {
   const s = await api('web/api/state?device=' + encodeURIComponent(dev()));
+  lastState = s;
   $('demo-badge').hidden = !s.demo;
   const m = s.latest;
+  const [low, high] = range();
+  let soil = null;
   if (m) {
-    const age = s.now - m.ts;
-    $('online').textContent = (age < 120 ? 'на связи' : 'нет данных ' + ago(age)) +
-                              ' · ' + fmtTime(m.ts);
-    $('status').textContent = age < 120 ? 'на связи' : 'нет связи';
-    $('c-status').classList.toggle('alert', age >= 120);
-    $('soil').textContent = m.soil_ok ? m.soil_pct : (m.soil_dry_d0 ? 'СУХО' : 'МОКРО');
-    $('c-soil').classList.toggle('alert', m.soil_ok ? m.soil_pct < 30 : !!m.soil_dry_d0);
+    const age = s.now - m.ts, on = age < 120;
+    $('online').textContent = on ? 'на связи' : 'нет данных ' + ago(age);
+    $('online-dot').className = 'dot ' + (on ? 'on' : 'off');
+    $('status').textContent = on ? 'на связи' : 'нет связи';
+    $('c-status').classList.toggle('alert', !on);
+    soil = m.soil_ok ? m.soil_pct : null;
+    $('soil').textContent = m.soil_ok ? m.soil_pct : (m.soil_dry_d0 ? 'сухо' : 'мокро');
     $('temp').textContent = m.temp == null ? '--' : m.temp.toFixed(1);
     $('hum').textContent = m.air_hum == null ? '--' : Math.round(m.air_hum);
-    $('raw').textContent = `Сырое значение датчика: ${m.soil_raw ?? '--'}` +
+    $('raw').textContent = `Датчик: ${m.soil_raw ?? '--'} raw` +
                            (s.pending ? ` · ждёт полив ${s.pending.seconds} с` : '');
   } else {
     $('online').textContent = 'данных пока нет';
+    $('online-dot').className = 'dot';
     $('status').textContent = '--';
   }
+  setSoilState(soil, low, high);
   const w = s.events.find(e => e.type === 'water');
   $('watered').textContent = w ? ago(s.now - w.ts) : '--';
   if (s.calibration && document.activeElement.tagName !== 'INPUT') {
     $('dry').value = s.calibration.dry_raw;
     $('wet').value = s.calibration.wet_raw;
   }
-  $('events').innerHTML = s.events.map(e =>
-    `<tr><td>${fmtTime(e.ts)}</td><td>${esc(e.type)}</td><td>${esc(e.value)}</td>` +
-    `<td>${esc(NOTES[e.note] || e.note)}</td></tr>`).join('');
+  renderEvents(s.events);
+  return soil;
+}
+
+function renderEvents(events) {
+  $('events').innerHTML = events.length ? events.map(e =>
+    `<div class="item"><div class="main"><div>${esc(EVENTS[e.type] || e.type)}` +
+    `${e.type === 'water' && e.value ? ` · ${esc(e.value)} с` : ''}</div>` +
+    `<div class="meta">${fmtTime(e.ts)}${e.note ? ' · ' + esc(NOTES[e.note] || e.note) : ''}</div></div>` +
+    `<span class="tag ${e.type === 'water' ? 'water' : ''}">${esc(NOTES[e.note] || e.type)}</span></div>`
+  ).join('') : '<div class="empty">Событий пока нет.</div>';
+}
+
+function inText(h) {           // «через 5 ч», «через 3 дня»
+  if (h < 1) return 'меньше чем через час';
+  if (h < 48) return `примерно через ${Math.round(h)} ч`;
+  const d = Math.round(h / 24);
+  return `примерно через ${d} ${d % 10 === 1 && d % 100 !== 11 ? 'день' : d % 10 >= 2 && d % 10 <= 4 && (d % 100 < 10 || d % 100 >= 20) ? 'дня' : 'дней'}`;
 }
 
 function untilText(h) {
@@ -298,141 +735,201 @@ function showForecast(fc) {
   if (fc.status !== 'ok') {
     $('next').textContent = '--';
     $('fc-note').textContent = 'Прогноз: ' + (fc.note || 'нет данных');
-    return;
+    return null;
   }
-  $('next').textContent = untilText(fc.next_water_ts ? fc.hours_to_threshold : null);
+  const hours = fc.next_water_ts ? fc.hours_to_threshold : null;
+  $('next').textContent = untilText(hours);
   const m = fc.model, ad = fc.adaptation;
   let note = m
-    ? `Прогноз — модель ${m.version}, обучена на открытых датасетах ` +
-      `(${m.trained_on.sources.join(', ')}); ошибка времени до порога ≈ ${m.metrics.ttt_mae_h} ч ` +
-      `против ${m.metrics.baselines.linear_ttt_mae_h} ч у линейного бейзлайна.`
-    : 'Прогноз — линейная экстраполяция (модель ещё не обучена).';
-  note += ad.own_cycles ? ` Адаптирована по ${ad.own_cycles} циклам этого растения (×${ad.scale}).`
-                        : ' Своих циклов для адаптации пока нет.';
+    ? `Прогноз — модель ${m.version}, обучена на открытых датасетах; ошибка «когда полить» ≈ ` +
+      `${Math.round(m.metrics.ttt_mae_h)} ч против ${Math.round(m.metrics.baselines.linear_ttt_mae_h)} ч у простого прогноза.`
+    : 'Прогноз — простая экстраполяция (модель ещё не обучена).';
+  note += ad.own_cycles ? ` Подстроен под это растение по ${ad.own_cycles} циклам.`
+                        : ' Своих циклов для подстройки пока нет.';
   $('fc-note').textContent = note;
+  return hours;
 }
 
+// Графики рисуются в настоящих пикселях контейнера — подписи не сплющиваются на телефоне
+function fitSvg(id, minH) {
+  const svg = $(id), r = svg.getBoundingClientRect();
+  const W = Math.max(260, Math.round(r.width || 600)), H = Math.max(minH, Math.round(r.height || minH));
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  return [W, H];
+}
+
+// ----- главный график: факт, прогноз, диапазон, поливы, подсказка при наведении -----
+const CH = { W:900, H:300, L:36, R:12, T:22, B:30 };
+let chartRows = [], chartX = null;
 function drawChart(rows, marks, fc, hours, low, high) {
   const traj = fc && fc.status === 'ok' ? fc.trajectory : [];
-  const svg = $('chart'), W = 900, H = 220, P = 24;
+  [CH.W, CH.H] = fitSvg('chart', 200);
+  const { W, H, L, R, T, B } = CH;
   const now = Date.now() / 1000;
   const first = rows.length ? rows[0].ts : now - hours * 3600;
   const t0 = Math.max(now - hours * 3600, hours > 24 * 31 ? first : now - hours * 3600);
-  const span = now - t0;
-  const t1 = traj.length ? now + Math.min(24 * 3600, span / 3) : now;
-  const x = t => P + (t - t0) / (t1 - t0) * (W - 2 * P);
-  const y = v => H - P - v / 100 * (H - 2 * P);
-  let g = `<rect x="${P}" width="${W - 2 * P}" y="${y(high)}" height="${y(low) - y(high)}"
-            fill="#2f7d4f10"/>`;
-  for (const v of [0, 50, 100]) {
-    g += `<line x1="${P}" x2="${W - P}" y1="${y(v)}" y2="${y(v)}" stroke="#ddd"/>
-          <text x="2" y="${y(v) + 4}" font-size="11" fill="#696964">${v}</text>`;
+  const t1 = traj.length ? now + Math.min(24 * 3600, (now - t0) / 3) : now;
+  const x = t => L + (t - t0) / (t1 - t0) * (W - L - R);
+  const y = v => H - B - v / 100 * (H - T - B);
+  chartX = { x, t0, t1 };
+  let g = `<rect x="${L}" width="${W - L - R}" y="${y(high)}" height="${y(low) - y(high)}" fill="#76e23814"/>`;
+  for (const v of [0, 25, 50, 75, 100]) {
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#262626" vector-effect="non-scaling-stroke"/>
+          <text x="${L - 8}" y="${y(v) + 4}" font-size="12" fill="#666" text-anchor="end">${v}</text>`;
   }
-  for (const [v, label] of [[low, 'порог'], [high, '']]) {
-    g += `<line x1="${P}" x2="${W - P}" y1="${y(v)}" y2="${y(v)}" stroke="#c44" stroke-dasharray="4 4"
-           vector-effect="non-scaling-stroke"/><text x="2" y="${y(v) + 4}" font-size="11"
-           fill="#c44">${Math.round(v)}</text>` + (label ? `<text x="${W - P - 34}" y="${y(v) - 4}"
-           font-size="11" fill="#c44">${label}</text>` : '');
-  }
-  if (rows.length > 1) {
-    const pts = rows.filter(r => r.ts >= t0).map(r =>
-      `${x(r.ts).toFixed(1)},${y(r.soil_pct).toFixed(1)}`).join(' ');
-    g += `<polyline points="${pts}" fill="none" stroke="#121212" stroke-width="2"
-           vector-effect="non-scaling-stroke"/>`;
+  g += `<line x1="${L}" x2="${W - R}" y1="${y(low)}" y2="${y(low)}" stroke="#ff5a52" stroke-dasharray="5 5"
+         vector-effect="non-scaling-stroke"/>`;
+  // подписи времени: начало и «сейчас»
+  const tl = t => new Date(t * 1000).toLocaleString('ru-RU', hours <= 24 ? { hour:'2-digit', minute:'2-digit' }
+                                                                         : { day:'numeric', month:'short' });
+  g += `<text x="${L}" y="${H - 8}" font-size="12" fill="#666">${tl(t0)}</text>`;
+  const visible = rows.filter(r => r.ts >= t0);
+  chartRows = visible;
+  if (visible.length > 1) {
+    const pts = visible.map(r => `${x(r.ts).toFixed(1)},${y(r.soil_pct).toFixed(1)}`).join(' ');
+    g += `<polyline points="${pts}" fill="none" stroke="#f2f2f2" stroke-width="2" stroke-linejoin="round"
+           stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
   } else {
-    g += `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="#696964">Нет данных</text>`;
+    g += `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="#666" font-size="14">Данных за этот период нет</text>`;
   }
   for (const m of marks.filter(m => m.ts >= t0)) {
-    const why = `Полив ${fmtTime(m.ts)}${m.value ? ', ' + m.value + ' с' : ''}: ` +
-                (NOTES[m.note] || m.note || 'причина не указана');
-    g += `<g><title>${esc(why)}</title><line x1="${x(m.ts)}" x2="${x(m.ts)}" y1="${P - 14}"
-           y2="${H - P}" stroke="#2f7d4f" stroke-width="1" stroke-dasharray="2 3"
-           vector-effect="non-scaling-stroke"/><rect x="${x(m.ts) - 5}" y="${P - 18}" width="10"
-           height="10" fill="#2f7d4f"/></g>`;
+    g += `<line x1="${x(m.ts)}" x2="${x(m.ts)}" y1="${T - 6}" y2="${H - B}" stroke="#76e23866"
+           vector-effect="non-scaling-stroke"/><rect x="${x(m.ts) - 4}" y="${T - 14}" width="8" height="8" rx="2" fill="#76e238"/>`;
   }
   if (traj.length) {
     const tt = p => fc.now + p.h * 3600;
     const vis = traj.filter(p => tt(p) <= t1 + 1);
     const band = vis.map(p => `${x(tt(p)).toFixed(1)},${y(p.hi).toFixed(1)}`).concat(
       vis.slice().reverse().map(p => `${x(tt(p)).toFixed(1)},${y(p.lo).toFixed(1)}`)).join(' ');
-    g += `<g><title>Прогноз ИИ с интервалом 10–90 %</title><polygon points="${band}"
-           fill="#12121214"/><polyline points="${vis.map(p =>
+    g += `<polygon points="${band}" fill="#76e2381f"/><polyline points="${vis.map(p =>
            `${x(tt(p)).toFixed(1)},${y(p.soil).toFixed(1)}`).join(' ')}" fill="none"
-           stroke="#121212" stroke-width="2" stroke-dasharray="6 4"
-           vector-effect="non-scaling-stroke"/></g>`;
-    g += `<line x1="${x(now)}" x2="${x(now)}" y1="${P}" y2="${H - P}" stroke="#bbb"/>
-          <text x="${x(now) + 4}" y="${P + 10}" font-size="11" fill="#696964">прогноз</text>`;
+           stroke="#76e238" stroke-width="2" stroke-dasharray="6 5" vector-effect="non-scaling-stroke"/>`;
+    g += `<line x1="${x(now)}" x2="${x(now)}" y1="${T}" y2="${H - B}" stroke="#444" vector-effect="non-scaling-stroke"/>
+          <text x="${x(now)}" y="${H - 8}" font-size="12" fill="#9b9b9b" text-anchor="middle">сейчас</text>`;
   }
-  svg.innerHTML = g;
+  g += `<line id="cross" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="#9b9b9b" visibility="hidden"
+         vector-effect="non-scaling-stroke"/><circle id="cross-dot" r="5" fill="#f2f2f2" stroke="#161616"
+         stroke-width="2" visibility="hidden" vector-effect="non-scaling-stroke"/>`;
+  $('chart').innerHTML = g;
+  $('chart').dataset.marks = JSON.stringify(marks.filter(m => m.ts >= t0).map(m => [m.ts, m.note, m.value]));
+  $('chart').dataset.yscale = JSON.stringify([H, T, B]);
 }
 
-async function loadChart() {
-  const hours = +$('hours').value;
+function chartHover(ev) {
+  if (!chartX || chartRows.length < 2) return;
+  const svg = $('chart'), box = svg.getBoundingClientRect();
+  const px = (ev.clientX - box.left) / box.width * CH.W;
+  const t = chartX.t0 + (px - CH.L) / (CH.W - CH.L - CH.R) * (chartX.t1 - chartX.t0);
+  let best = chartRows[0];
+  for (const r of chartRows) if (Math.abs(r.ts - t) < Math.abs(best.ts - t)) best = r;
+  const [H, T, B] = JSON.parse(svg.dataset.yscale);
+  const cx = chartX.x(best.ts), cy = H - B - best.soil_pct / 100 * (H - T - B);
+  const cross = $('cross'), dot = $('cross-dot');
+  cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('visibility', 'visible');
+  dot.setAttribute('cx', cx); dot.setAttribute('cy', cy); dot.setAttribute('visibility', 'visible');
+  const marks = JSON.parse(svg.dataset.marks || '[]');
+  const near = marks.find(m => Math.abs(m[0] - best.ts) < (chartX.t1 - chartX.t0) / 60);
+  const tip = $('tip');
+  tip.innerHTML = `<b>${Math.round(best.soil_pct)} %</b> · ${fmtTime(best.ts)}` +
+    (near ? `<br>Полив${near[2] ? ' ' + esc(near[2]) + ' с' : ''}: ${esc(NOTES[near[1]] || near[1] || '—')}` : '');
+  tip.style.display = 'block';
+  tip.style.left = Math.min(Math.max(cx / CH.W * box.width, 70), box.width - 70) + 'px';
+  tip.style.top = (cy / CH.H * box.height) + 'px';
+}
+function chartLeave() {
+  $('tip').style.display = 'none';
+  ['cross', 'cross-dot'].forEach(id => $(id) && $(id).setAttribute('visibility', 'hidden'));
+}
+$('chart-box').addEventListener('pointermove', chartHover);
+$('chart-box').addEventListener('pointerleave', chartLeave);
+
+const hoursNow = () => +document.querySelector('#hours-seg .active').dataset.hours;
+document.querySelectorAll('#hours-seg button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#hours-seg button').forEach(x => x.classList.toggle('active', x === b));
+  try { localStorage.setItem('hours', b.dataset.hours); } catch (e) {}
+  refresh();
+});
+try {
+  const h = localStorage.getItem('hours');
+  const b = h && document.querySelector(`#hours-seg [data-hours="${h}"]`);
+  if (b) document.querySelectorAll('#hours-seg button').forEach(x => x.classList.toggle('active', x === b));
+} catch (e) {}
+
+async function loadChart(soil) {
+  const hours = hoursNow();
   const q = `device=${encodeURIComponent(dev())}`;
   const [rows0, fc, marks] = await Promise.all([
     api(`web/api/history?${q}&hours=${hours}`), api(`web/api/forecast?${q}`).catch(() => ({})),
     api(`web/api/waterings?${q}&hours=${hours}`).catch(() => [])]);
-  showForecast(fc);
-  drawChart(rows0.filter(r => r.soil_ok), marks, fc, hours,
-            calib && calib.target_low != null ? calib.target_low : 30,
-            calib && calib.target_high != null ? Math.min(calib.target_high, 70) : 70);
+  lastForecast = fc;
+  const h = showForecast(fc);
+  const [low, high] = range();
+  jarvisMood(soil, low, high, lastState && lastState.pending, h);
+  drawChart(rows0.filter(r => r.soil_ok), marks, fc, hours, low, high);
 }
 
 async function loadDemo() {
-  const name = $('device').value.slice(5), hours = +$('hours').value;
+  const name = $('device').value.slice(5), hours = hoursNow();
   const d = await api(`web/api/demo?series=${encodeURIComponent(name)}&hours=${hours}`);
   const last = d.history[d.history.length - 1];
-  $('soil').textContent = last ? Math.round(last.soil_pct) : '--';
-  $('c-soil').classList.toggle('alert', !!last && last.soil_pct < 30);
+  const soil = last ? last.soil_pct : null;
+  $('soil').textContent = soil == null ? '--' : Math.round(soil);
+  setSoilState(soil, 30, 70);
   $('temp').textContent = last && last.temp != null ? last.temp.toFixed(1) : '--';
   $('hum').textContent = last && last.air_hum != null ? Math.round(last.air_hum) : '--';
   const w = d.waterings[d.waterings.length - 1];
   $('watered').textContent = w ? ago(Date.now() / 1000 - w.ts) : '--';
   $('status').textContent = 'датасет';
   $('c-status').classList.remove('alert');
-  $('next').textContent = d.forecast ? untilText(d.forecast.hours_to_threshold) : '--';
-  $('online').textContent = '';
+  const h = d.forecast ? d.forecast.hours_to_threshold : null;
+  $('next').textContent = untilText(h);
+  $('online').textContent = 'открытый датасет';
+  $('online-dot').className = 'dot';
   $('raw').textContent = '';
   $('source-note').hidden = false;
-  $('source-note').textContent = `Открытый датасет «${d.series}» (${d.source}), данные ` +
-    `${d.period[0]} … ${d.period[1]}, время сдвинуто так, что ряд заканчивается сейчас; ` +
-    'влажность нормализована. Прогноз — рабочая модель без адаптации.';
+  $('source-note').textContent = `Открытый датасет «${d.series}» (${d.source}), ${d.period[0]} … ${d.period[1]}: ` +
+    'время сдвинуто так, что ряд заканчивается сейчас, влажность нормализована. Прогноз — модель без подстройки.';
   $('fc-note').textContent = '';
+  jarvisMood(soil, 30, 70, null, h);
   drawChart(d.history, d.waterings, d.forecast, hours, 30, 70);
 }
 
 // ----- карточка модели, сравнение политик (W1, M2) -----
 function bars(svgId, items) {
-  const W = 400, H = 150, P = 28, max = Math.max(...items.map(i => i.v || 0), 1);
-  const bw = (W - 2 * P) / items.length;
-  let g = '';
+  const [W, H] = fitSvg(svgId, 160), B = 34, T = 24, max = Math.max(...items.map(i => i.v || 0), 1);
+  const slot = W / items.length, bw = Math.min(56, slot * 0.5);
+  let g = `<line x1="0" x2="${W}" y1="${H - B}" y2="${H - B}" stroke="#2a2a2a" vector-effect="non-scaling-stroke"/>`;
   items.forEach((it, i) => {
-    const h = (it.v || 0) / max * (H - 2 * P), x0 = P + i * bw + bw * 0.15;
-    g += `<rect x="${x0}" y="${H - P - h}" width="${bw * 0.7}" height="${h}"
-           fill="${i === 0 ? '#121212' : '#bdbdb5'}"/>
-          <text x="${x0 + bw * 0.35}" y="${H - P - h - 4}" font-size="12" text-anchor="middle"
-           fill="#121212">${it.v == null ? '—' : Math.round(it.v)}</text>
-          <text x="${x0 + bw * 0.35}" y="${H - 8}" font-size="11" text-anchor="middle"
-           fill="#696964">${esc(it.label)}</text>`;
+    const h = Math.max(2, (it.v || 0) / max * (H - B - T)), x0 = slot * i + (slot - bw) / 2, top = H - B - h;
+    const r = Math.min(6, h);
+    g += `<path d="M${x0},${H - B} V${top + r} Q${x0},${top} ${x0 + r},${top} H${x0 + bw - r}
+           Q${x0 + bw},${top} ${x0 + bw},${top + r} V${H - B} Z" fill="${i === 0 ? '#76e238' : '#3a3a3a'}">
+           <title>${esc(it.label)}: ${it.v == null ? '—' : Math.round(it.v) + ' ч'}</title></path>
+          <text x="${x0 + bw / 2}" y="${top - 8}" font-size="14" text-anchor="middle" fill="#f2f2f2"
+           font-weight="600">${it.v == null ? '—' : Math.round(it.v)}</text>
+          <text x="${x0 + bw / 2}" y="${H - 10}" font-size="12" text-anchor="middle" fill="#9b9b9b">${esc(it.label)}</text>`;
   });
   $(svgId).innerHTML = g;
 }
 
 function curve(svgId, points) {
-  const W = 400, H = 150, P = 28;
+  const [W, H] = fitSvg(svgId, 160), L = 20, R = 20, T = 28, B = 34;
   const vals = points.map(p => p.ttt_mae_h).filter(v => v != null);
   if (!vals.length) { $(svgId).innerHTML = ''; return; }
-  const max = Math.max(...vals) * 1.15, n = points.length - 1 || 1;
-  const x = i => P + i / n * (W - 2 * P), y = v => H - P - v / max * (H - 2 * P);
-  let g = `<line x1="${P}" x2="${W - P}" y1="${H - P}" y2="${H - P}" stroke="#ddd"/>`;
-  g += `<polyline points="${points.map((p, i) => `${x(i)},${y(p.ttt_mae_h)}`).join(' ')}"
-         fill="none" stroke="#121212" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  const max = Math.max(...vals) * 1.1, n = points.length - 1 || 1;
+  const x = i => L + i / n * (W - L - R), y = v => H - B - v / max * (H - T - B);
+  let g = `<line x1="0" x2="${W}" y1="${H - B}" y2="${H - B}" stroke="#2a2a2a" vector-effect="non-scaling-stroke"/>`;
+  const pts = points.map((p, i) => `${x(i)},${y(p.ttt_mae_h)}`).join(' ');
+  g += `<polygon points="${x(0)},${H - B} ${pts} ${x(n)},${H - B}" fill="#76e23814"/>`;
+  g += `<polyline points="${pts}" fill="none" stroke="#76e238" stroke-width="2" stroke-linejoin="round"
+         vector-effect="non-scaling-stroke"/>`;
   points.forEach((p, i) => {
-    g += `<circle cx="${x(i)}" cy="${y(p.ttt_mae_h)}" r="3" fill="#121212"/>
-          <text x="${x(i)}" y="${y(p.ttt_mae_h) - 6}" font-size="11" text-anchor="middle">${
-          Math.round(p.ttt_mae_h)}</text>
-          <text x="${x(i)}" y="${H - 8}" font-size="11" text-anchor="middle" fill="#696964">${
-          p.cycles}</text>`;
+    const label = i === 0 || i === n;      // подписываем только начало и конец
+    g += `<circle cx="${x(i)}" cy="${y(p.ttt_mae_h)}" r="4.5" fill="#76e238" stroke="#161616" stroke-width="2">
+           <title>${p.cycles} циклов: ${Math.round(p.ttt_mae_h)} ч</title></circle>` +
+         (label ? `<text x="${x(i)}" y="${y(p.ttt_mae_h) - 12}" font-size="14" font-weight="600"
+           text-anchor="middle" fill="#f2f2f2">${Math.round(p.ttt_mae_h)} ч</text>` : '') +
+         `<text x="${x(i)}" y="${H - 10}" font-size="12" text-anchor="middle" fill="#9b9b9b">${p.cycles}</text>`;
   });
   $(svgId).innerHTML = g;
 }
@@ -445,61 +942,62 @@ async function loadModel() {
   const c = card.champion;
   if (c) {
     const t = c.trained_on, m = c.metrics, b = m.baselines || {};
-    $('model-note').textContent = `Версия ${c.version} (${m.kind === 'gbr' ? 'градиентный бустинг' :
-      'гребневая регрессия'}), обучена на ${t.series.length} рядах из открытых датасетов (` +
+    $('model-note').textContent = `Версия ${c.version} · ${m.kind === 'gbr' ? 'градиентный бустинг' :
+      'гребневая регрессия'} · обучена на ${t.series.length} рядах открытых датасетов (` +
       `${t.sources.join(', ')})` + (t.own_cycles ? ` и ${t.own_cycles} циклах своего растения` :
-      '; своих данных в обучении пока нет') + `. Время до порога точнее линейного прогноза на ` +
-      `${Math.round((m.gain_ttt_vs_linear || 0) * 100)} %.`;
-    bars('model-bars', [{ label:'модель', v:m.ttt_mae_h },
-                        { label:'линейная 6 ч', v:b.linear_ttt_mae_h },
+      ', своих данных в обучении пока нет') + `. Время до полива предсказывает точнее простого ` +
+      `прогноза на ${Math.round((m.gain_ttt_vs_linear || 0) * 100)} %.`;
+    bars('model-bars', [{ label:'ИИ', v:m.ttt_mae_h },
+                        { label:'линейно 6 ч', v:b.linear_ttt_mae_h },
                         { label:'средняя скорость', v:b.mean_rate_ttt_mae_h }]);
     curve('adapt-curve', (m.adaptation && m.adaptation._mean) || []);
     const rows = [
-      ['Время до порога: MAE, ч', m.ttt_mae_h, null, b.linear_ttt_mae_h, b.mean_rate_ttt_mae_h],
-      ['Время до порога: медиана, ч', m.ttt_median_h, null, b.linear_ttt_median_h,
-       b.mean_rate_ttt_median_h],
-      ['Влажность через 6 ч: MAE, п. п.', m.mae_6h, b.persistence_mae_6h, b.linear_mae_6h, null],
-      ['Влажность через 24 ч: MAE, п. п.', m.mae_24h, b.persistence_mae_24h, b.linear_mae_24h, null],
+      ['Когда полить: ошибка, ч', m.ttt_mae_h, null, b.linear_ttt_mae_h, b.mean_rate_ttt_mae_h],
+      ['Когда полить: медиана ошибки, ч', m.ttt_median_h, null, b.linear_ttt_median_h, b.mean_rate_ttt_median_h],
+      ['Влажность через 6 ч: ошибка, п. п.', m.mae_6h, b.persistence_mae_6h, b.linear_mae_6h, null],
+      ['Влажность через 24 ч: ошибка, п. п.', m.mae_24h, b.persistence_mae_24h, b.linear_mae_24h, null],
     ];
     $('model-table').innerHTML = rows.map(r => `<tr><td>${r[0]}</td>` + r.slice(1).map((v, i) =>
-      `<td class="num"${i === 0 ? ' style="font-weight:700"' : ''}>${n1(v)}</td>`).join('') +
-      '</tr>').join('');
+      `<td class="num${i === 0 ? ' hi' : ''}">${n1(v)}</td>`).join('') + '</tr>').join('');
     const mon = card.monitoring;
     $('model-monitor').textContent = mon.checked
-      ? `На своём растении за ${mon.days} дней проверено ${mon.checked} прогнозов: ` +
-        `фактическая ошибка ≈ ${mon.ttt_mae_h} ч.`
-      : `Фактическая ошибка на своём растении появится, когда почва дойдёт до порога ` +
-        `(ожидают проверки: ${mon.pending}).`;
+      ? `На своём растении за ${mon.days} дней проверено ${mon.checked} прогнозов: фактическая ошибка ≈ ${mon.ttt_mae_h} ч.`
+      : `Фактическая ошибка на своём растении появится, когда почва дойдёт до порога (ожидают проверки: ${mon.pending}).`;
   }
-  $('model-history').innerHTML = card.history.map(h => `<tr><td>${esc(h.version)}</td>` +
-    `<td>${h.is_champion ? 'да' : ''}</td><td class="num">${n1(h.ttt_mae_h)}</td>` +
-    `<td class="num">${n1(h.mae_6h)}</td><td>${esc(h.sources.join(', '))}` +
-    `${h.own_cycles ? ' + ' + h.own_cycles + ' своих циклов' : ''}</td></tr>`).join('');
+  $('model-history').innerHTML = card.history.map(h => `<div class="item"><div class="main">` +
+    `<div>${esc(h.version)}</div><div class="meta">${esc(h.sources.join(', '))}` +
+    `${h.own_cycles ? ' + ' + h.own_cycles + ' своих циклов' : ''} · ошибка ${n1(h.ttt_mae_h)} ч</div></div>` +
+    `${h.is_champion ? '<span class="tag water">рабочая</span>' : '<span class="tag">не выкачена</span>'}</div>`).join('');
   const p = card.policy_sim;
   if (p) {
     const a = p.threshold, m = p.ml;
-    const rows = [['Время в диапазоне 30–70 %', pct(a.in_range_share), pct(m.in_range_share)],
-                  ['Часы пересыхания (< 30 %)', n1(a.hours_dry), n1(m.hours_dry)],
-                  ['Часы перелива (> 70 %)', n1(a.hours_wet), n1(m.hours_wet)],
-                  ['Средняя влажность, %', n1(a.mean_soil), n1(m.mean_soil)],
-                  ['Число поливов', a.waterings, m.waterings],
-                  ['Работа насоса, с (≈ расход воды)', n1(a.pump_seconds), n1(m.pump_seconds)],
-                  ['Суток в симуляции', n1(a.days), n1(m.days)]];
-    $('policy-table').innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td class="num">${r[1]}</td>` +
-      `<td class="num">${r[2]}</td></tr>`).join('');
+    const better = (x, y, low) => (low ? x < y : x > y);
+    const rows = [['Время в диапазоне 30–70 %', a.in_range_share, m.in_range_share, pct, false],
+                  ['Часы пересыхания (< 30 %)', a.hours_dry, m.hours_dry, n1, true],
+                  ['Средняя влажность, %', a.mean_soil, m.mean_soil, n1, false],
+                  ['Число поливов', a.waterings, m.waterings, v => v, true],
+                  ['Работа насоса, с (≈ расход воды)', a.pump_seconds, m.pump_seconds, n1, true],
+                  ['Суток в симуляции', a.days, m.days, n1, null]];
+    $('policy-table').innerHTML = rows.map(([k, x, y, f, low]) => `<tr><td>${k}</td>` +
+      `<td class="num${low !== null && better(x, y, low) ? ' hi' : ''}">${f(x)}</td>` +
+      `<td class="num${low !== null && better(y, x, low) ? ' hi' : ''}">${f(y)}</td></tr>`).join('');
   } else {
-    $('policy-table').innerHTML = '<tr><td colspan="3" class="muted">Появится после обучения ' +
-      'модели на открытых датасетах.</td></tr>';
+    $('policy-table').innerHTML = '<tr><td colspan="3" class="muted">Появится после обучения модели.</td></tr>';
   }
 }
 
 async function refresh() {
   try {
     document.body.classList.toggle('demo', isDemo());
-    if (isDemo()) { await loadDemo(); }
-    else {
+    if (isDemo()) {
+      await loadDemo();
+      if (document.querySelector('.tab.active')?.hasAttribute('data-device')) showTab('overview');
+    } else {
       $('source-note').hidden = true;
-      await loadCalibration(); await loadState(); await loadChart(); await loadDecisions();
+      await loadCalibration();
+      const soil = await loadState();
+      await loadChart(soil);
+      await loadDecisions();
     }
     await loadModel();
   } catch (e) { say('Ошибка: ' + e.message); }
@@ -515,13 +1013,15 @@ $('water').onclick = async () => {
 async function calibrate(body) {
   try {
     const r = await api('web/api/calibration', { device: dev(), ...body });
-    say(`Калибровка: сухо ${r.dry_raw}, мокро ${r.wet_raw}. Устройство получит её с телеметрией.`);
+    say(`Калибровка: сухо ${r.dry_raw}, мокро ${r.wet_raw}`);
     $('dry').value = r.dry_raw; $('wet').value = r.wet_raw;
   } catch (e) { say('Ошибка: ' + e.message); }
 }
 $('cal-save').onclick = () => calibrate({ dry_raw: +$('dry').value, wet_raw: +$('wet').value });
 $('cal-dry').onclick = () => calibrate({ use_current: 'dry' });
 $('cal-wet').onclick = () => calibrate({ use_current: 'wet' });
+
+// ----- чат -----
 const chat = [];
 function addBubble(role, text) {
   const div = document.createElement('div');
@@ -532,7 +1032,7 @@ function addBubble(role, text) {
 }
 async function askAI(path, body, question) {
   $('chat-send').disabled = $('why').disabled = true;
-  $('chat-msg').textContent = 'Думаю…';
+  $('chat-msg').textContent = `${assistantName} думает…`;
   addBubble('user', question);
   try {
     const r = await api(path, body);
@@ -556,10 +1056,11 @@ $('chat-form').onsubmit = ev => {
   askAI('web/api/chat', { device: dev(), messages: chat }, text);
 };
 $('why').onclick = () => askAI('web/api/why', { device: dev() }, 'Почему полили?');
+
 // ----- голос (V1b): журнал, автовоспроизведение, микрофон браузера -----
 let soundOn = false, lastVoiceId = null, recorder = null;
 const playedHere = new Set(), player = new Audio();
-const INTENTS = { water:'полив', status:'о растении', chat:'разговор', empty:'не расслышал' };
+const INTENTS = { water:'полив', status:'о растении', chat:'разговор', empty:'не расслышал', wake:'позвали' };
 
 function play(id) { player.src = `web/api/voice/${id}.wav`; player.play().catch(() => {}); }
 
@@ -567,16 +1068,16 @@ function voiceItem(v) {
   const div = document.createElement('div');
   div.className = 'item';
   const total = (v.ms_stt || 0) + (v.ms_llm || 0) + (v.ms_tts || 0);
-  const meta = document.createElement('div');
-  meta.className = 'meta';
-  meta.textContent = `${fmtTime(v.ts)} · ${INTENTS[v.intent] || v.intent} · ответ за ` +
-                     `${(total / 1000).toFixed(1)} с (речь ${(v.ms_stt / 1000).toFixed(1)}, ` +
-                     `ИИ ${(v.ms_llm / 1000).toFixed(1)}, синтез ${(v.ms_tts / 1000).toFixed(1)})`;
-  const q = document.createElement('div'); q.className = 'bubble user'; q.textContent = v.transcript;
-  const a = document.createElement('div'); a.className = 'bubble assistant'; a.textContent = v.answer;
+  const main = document.createElement('div'); main.className = 'main';
+  const q = document.createElement('div'); q.textContent = '«' + (v.transcript || '…') + '»';
+  const a = document.createElement('div'); a.className = 'meta'; a.style.color = 'var(--text)';
+  a.style.marginTop = '6px'; a.textContent = v.answer;
+  const meta = document.createElement('div'); meta.className = 'meta'; meta.style.marginTop = '6px';
+  meta.textContent = `${fmtTime(v.ts)} · ${INTENTS[v.intent] || v.intent} · ответ за ${(total / 1000).toFixed(1)} с`;
+  main.append(q, a, meta);
   const again = document.createElement('button');
-  again.className = 'ghost'; again.textContent = 'Повторить'; again.onclick = () => play(v.id);
-  div.append(meta, q, a, again);
+  again.className = 'btn ghost'; again.textContent = 'Повторить'; again.onclick = () => play(v.id);
+  div.append(main, again);
   return div;
 }
 
@@ -585,7 +1086,9 @@ async function loadVoice() {
   const r = await api(`web/api/voice/log?device=${encodeURIComponent(dev())}&after=${lastVoiceId || 0}`);
   if (!r.enabled) { $('voice-msg').textContent = 'Голос выключен на сервере.'; return; }
   const items = r.items.slice().reverse();            // от старых к новым
+  if (first && !items.length) $('voice-log').innerHTML = '<div class="empty">Голосом пока не говорили.</div>';
   for (const v of items) {
+    const empty = $('voice-log').querySelector('.empty'); if (empty) empty.remove();
     $('voice-log').prepend(voiceItem(v));
     if (!first && soundOn && !playedHere.has(v.id)) play(v.id);
   }
@@ -616,8 +1119,8 @@ $('talk').onclick = async () => {
   recorder.onstop = async () => {
     stream.getTracks().forEach(t => t.stop());
     recorder = null; clearTimeout(limit);
-    $('talk').classList.remove('rec'); $('talk').textContent = 'Говорить';
-    $('voice-msg').textContent = 'Думаю…';
+    $('talk').classList.remove('rec'); $('talk').textContent = 'Говорить в микрофон';
+    $('voice-msg').textContent = `${assistantName} думает…`;
     try {
       const resp = await fetch(`web/api/voice?device=${encodeURIComponent(dev())}`,
                                { method: 'POST', body: new Blob(chunks) });
@@ -635,29 +1138,33 @@ $('talk').onclick = async () => {
   $('voice-msg').textContent = 'Слушаю… (до 8 с)';
 };
 
-// ----- режим полива и журнал решений (D0) -----
+// ----- режим полива и решения (D0) -----
 const ACTIONS = { water:'полив', blocked:'не поливать', mode:'режим' };
 async function loadDecisions() {
   const q = 'device=' + encodeURIComponent(dev());
   const [m, list] = await Promise.all([api('web/api/mode?' + q), api('web/api/decisions?' + q)]);
-  if (document.activeElement !== $('mode')) $('mode').value = m.mode;
+  document.querySelectorAll('#mode-seg button').forEach(b => b.classList.toggle('active', b.dataset.mode === m.mode));
   $('mode-msg').textContent = m.mode === 'ml' && !m.ml_available
-    ? 'Пока действует порог: ' + m.ml_reason : (m.active === 'ml'
-      ? 'Сервер поливает по прогнозу; без связи > 10 мин устройство вернётся к порогу.' : '');
-  $('decisions').innerHTML = '';
+    ? 'Пока действует порог: ' + m.ml_reason
+    : (m.active === 'ml' ? 'Сервер поливает по прогнозу; без связи больше 10 мин устройство вернётся к порогу.'
+                         : 'Устройство поливает само, когда почва суше 30 %.');
+  $('decisions').innerHTML = list.length ? '' : '<div class="empty">Решений пока не было.</div>';
   for (const d of list) {
-    const tr = document.createElement('tr');
-    for (const v of [fmtTime(d.ts), (ACTIONS[d.action] || d.action) +
-                     (d.action === 'water' ? ` ${d.seconds} с` : ''), d.reason]) {
-      const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
-    }
-    $('decisions').appendChild(tr);
+    const div = document.createElement('div'); div.className = 'item';
+    const main = document.createElement('div'); main.className = 'main';
+    const r = document.createElement('div'); r.textContent = d.reason;
+    const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = fmtTime(d.ts);
+    main.append(r, meta);
+    const tag = document.createElement('span'); tag.className = 'tag ' + d.action;
+    tag.textContent = (ACTIONS[d.action] || d.action) + (d.action === 'water' ? ` ${d.seconds} с` : '');
+    div.append(main, tag);
+    $('decisions').appendChild(div);
   }
 }
-$('mode').onchange = async () => {
-  try { await api('web/api/mode', { device: dev(), mode: $('mode').value }); await loadDecisions(); }
+document.querySelectorAll('#mode-seg button').forEach(b => b.onclick = async () => {
+  try { await api('web/api/mode', { device: dev(), mode: b.dataset.mode }); await loadDecisions(); }
   catch (e) { say('Режим: ' + e.message); }
-};
+});
 
 // ----- калибровка под растение (C1) -----
 const CONF = { none:'нет', low:'низкая', medium:'средняя', high:'высокая' };
@@ -680,21 +1187,21 @@ async function loadCalibration() {
     d.classList.toggle('done', i < stage); d.classList.toggle('now', i === stage);
   });
   $('cal-hint').textContent = s.hint;
-  $('cal-hint').classList.toggle('warn', !!(st.anomaly || st.error));
+  $('cal-note').classList.toggle('warn', !!(st.anomaly || st.error));
   $('cal-confirm').hidden = !st.anomaly;
   $('cal-mark-dry').hidden = stage !== 1;
   $('cal-mark-wet').hidden = !(stage === 1 && st.dry_done && !st.wet_started);
   const num = (v, d = 1) => v == null ? '—' : (+v).toFixed(d);
   const rows = [
     ['Целевой диапазон', c.target_low == null ? '—' : `${c.target_low}–${c.target_high} %`],
-    ['Датчик: сухо / влажно (raw)', `${c.raw_dry ?? '—'} / ${c.raw_wet ?? '—'}`],
-    ['Доза, % за секунду (k_dose)', num(c.k_dose, 2)],
+    ['Датчик: сухо / влажно', `${c.raw_dry ?? '—'} / ${c.raw_wet ?? '—'} raw`],
+    ['Доза, % за секунду насоса', num(c.k_dose, 2)],
     ['Задержка отклика, мин', num(c.response_delay_min)],
     ['Скорость высыхания, %/ч', num(c.dry_rate, 2)],
     ['Уверенность', `${CONF[c.confidence] || '—'} · циклов: ${c.cycles ?? 0}`],
   ];
-  $('cal-params').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
-  $('cal-anomalies').textContent = s.anomalies.length ? 'Журнал аномалий: ' + s.anomalies.map(a =>
+  $('cal-params').innerHTML = rows.map(([k, v]) => `<tr><td class="muted">${k}</td><td class="num">${esc(v)}</td></tr>`).join('');
+  $('cal-anomalies').textContent = s.anomalies.length ? 'Аномалии: ' + s.anomalies.map(a =>
     `${fmtTime(a.ts)} — ${a.type === 'anomaly' ? a.note : 'подтверждено'}`).join('; ') : '';
 }
 async function calStep(path, body) {
@@ -714,13 +1221,22 @@ $('cal-confirm').onclick = () => calStep('web/api/calibration/confirm');
 $('cal-reset').onclick = () => confirm('Начать калибровку заново?') &&
   calStep('web/api/calibration/reset');
 
+let lastDraw = null;                    // данные последнего графика — для перерисовки по размеру
+const _drawChart = drawChart;
+drawChart = (...a) => { lastDraw = a; _drawChart(...a); };
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (lastDraw) _drawChart(...lastDraw); loadModel().catch(() => {}); }, 150);
+});
+
 $('device').onchange = () => {
   chat.length = 0; $('chat-log').innerHTML = '';
   lastVoiceId = null; $('voice-log').innerHTML = '';
   refresh(); loadVoice().catch(() => {});
 };
-$('hours').onchange = refresh;
 
+loadName();
 loadDevices().then(() => {
   // ?source=demo:soil_monitor — сразу открыть нужный источник (для записи экрана)
   const src = new URLSearchParams(location.search).get('source');

@@ -19,7 +19,7 @@ WATER_REASONS = {
 MAX_HISTORY = 10          # реплик чата, передаваемых модели
 MAX_MESSAGE_CHARS = 2000
 
-SYSTEM = """Ты — Джарвис, помощник по уходу за комнатным растением. Отвечай по-русски, коротко
+SYSTEM = """Ты — {name}, помощник по уходу за комнатным растением. Отвечай по-русски, коротко
 (2–4 предложения), дружелюбно и только на основе данных ниже. Если данных не хватает — так и скажи,
 не выдумывай. Сам ты поливать не можешь: поливает устройство по порогу или сервер по прогнозу,
 вручную — кнопкой на веб-странице или голосом; любой полив проходит проверки безопасности
@@ -103,7 +103,9 @@ def build_messages(db: Database, device: str, history: list[Message]) -> list[Me
     """Системная подсказка с данными + последние реплики пользователя и ассистента."""
     clean = [{"role": h["role"], "content": h["content"][:MAX_MESSAGE_CHARS]}
              for h in history if h.get("role") in ("user", "assistant") and h.get("content")]
-    return [{"role": "system", "content": SYSTEM + "\n\nДанные:\n" + describe(db, device)},
+    from ..assistant import get_name
+    system = SYSTEM.replace("{name}", get_name(db))
+    return [{"role": "system", "content": system + "\n\nДанные:\n" + describe(db, device)},
             *clean[-MAX_HISTORY:]]
 
 
