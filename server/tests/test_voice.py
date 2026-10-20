@@ -181,3 +181,17 @@ def test_browser_voice_returns_json_and_log(voice_app, device, web):
     log = web.get(f"/web/api/voice/log?after={body['id'] - 1}").json()
     assert log["enabled"] and [i["id"] for i in log["items"]] == [body["id"]]
     assert web.get("/web/api/voice/log?after=" + str(body["id"])).json()["items"] == []
+
+
+def test_voice_accepts_chunked_upload_like_device(voice_app, device):
+    """Устройство шлёт фразу потоком (Transfer-Encoding: chunked), не храня её целиком (V2)."""
+    voice_app.state.stt = FakeSTT("как дела")
+
+    def chunks():
+        for i in range(0, len(PHRASE), 320):
+            yield PHRASE[i:i + 320]
+    r = device.post("/api/voice", content=chunks(),
+                    headers={"Content-Type": "audio/L16; rate=16000; channels=1"})
+    assert r.status_code == 200
+    audio = voice_app.state.stt.seen[0]
+    assert len(audio) == RATE                                  # все 16000 отсчётов дошли

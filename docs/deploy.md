@@ -71,7 +71,11 @@ docker compose exec plant python -m app.ml train                # обучени
 Первый старт скачивает модели (~0.5 ГБ) в `/data/models/voice`; с `VOICE_PRELOAD=1` это
 происходит сразу после запуска (`docker compose logs -f` → «модели голоса загружены»).
 
-- Устройство: `POST /api/voice` (контракт 4.3) — после задачи V2.
+- Устройство (V2): **1 хлопок** → `Listening...` → фраза (до 8 с, конец — 1 с тишины) →
+  `Thinking...` → `Speaking...`. По умолчанию ответ звучит в браузере (`AUDIO_OUT AUDIO_NONE`
+  в `firmware/autopoliv_ui/audio_out.h`): откройте дашборд и нажмите «Включить звук».
+  Звук на устройстве: `AUDIO_PDM` (PAM8403 через RC-фильтр) или `AUDIO_I2S_MAX98357` —
+  сначала уточните выводы в `audio_out.h`. Без голоса: `VOICE_ENABLED 0` (1 хлопок — приветствие).
 - Без устройства: `python scripts/voice_test.py phrase.wav --server http://<IP>:8000 --token <PLANT_TOKEN>`
   (WAV 16 бит, моно, 16 кГц) → распознанная фраза, ответ и `answer.wav`.
 - Дашборд, блок «Голосовой помощник»: «Включить звук» — ответы на фразы устройства звучат

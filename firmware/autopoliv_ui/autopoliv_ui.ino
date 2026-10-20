@@ -12,6 +12,8 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <ArduinoJson.h>
+#include <freertos/stream_buffer.h>
+#include "audio_out.h"   // голос (V2): настройки и вывод звука
 #include <time.h>
 #include <utility>
 
@@ -126,6 +128,7 @@ SemaphoreHandle_t adcMutex;
 volatile int clapCount = 0;
 volatile unsigned long lastClap = 0;
 volatile int micPeak = 0;
+volatile bool voiceBusy = false;   // идёт голосовой диалог: хлопки и замер почвы на паузе
 
 unsigned long lastWater = 0;
 bool everWatered = false;
@@ -212,6 +215,11 @@ void micTask(void *) {
     if (lvl > micPeak) micPeak = lvl;
     unsigned long now = millis();
 
+    if (voiceBusy) {                  // во время записи/ответа хлопки не считаем
+      loud = false;
+      vTaskDelay(10);
+      continue;
+    }
     if (!loud && lvl > CLAP_THRESHOLD) {
       loud = true;
       loudStart = now;
@@ -643,6 +651,7 @@ void updateSensors() {
     curHum = he.relative_humidity;
   }
 
+  if (voiceBusy) return;               // АЦП занят записью фразы — замер в следующий раз
   curSoil = readSoilPercent();
   soilDry = digitalRead(PIN_SOIL_D) == HIGH;   // если D0 показывает наоборот — поменяйте на LOW
 
@@ -843,9 +852,167 @@ void handleSetup() {
   }
 }
 
+// ===== Голос (V2): запись → сервер → ответ =====
+// Запись идёт в loop (ядро 1) под adcMutex; отправка — в отдельной задаче на ядре 0 (там Wi-Fi):
+// данные идут через StreamBuffer, вся фраза в RAM не хранится.
+StreamBufferHandle_t voiceStream = nullptr;
+volatile bool voiceRecording = false;
+volatile int voiceResult = 0;          // 0 — идёт, 1 — успех, -1 — ошибка
+TaskHandle_t voiceTaskHandle = nullptr;
+
+bool splitServer(String& host, uint16_t& port) {
+  String u = cfgServer;
+  if (!u.startsWith("http://")) return false;     // HTTPS устройство не использует (раздел 4.4)
+  u = u.substring(7);
+  int slash = u.indexOf('/');
+  if (slash >= 0) u = u.substring(0, slash);
+  int colon = u.indexOf(':');
+  host = colon >= 0 ? u.substring(0, colon) : u;
+  port = colon >= 0 ? u.substring(colon + 1).toInt() : 80;
+  return host.length() > 0 && port > 0;
+}
+
+// Задача на ядре 0: POST /api/voice (chunked) → читаем ответ и выводим звук
+void voiceTask(void*) {
+  String host;
+  uint16_t port;
+  WiFiClient client;
+  int result = -1;
+  if (splitServer(host, port) && client.connect(host.c_str(), port, 3000)) {
+    client.setTimeout(VOICE_TIMEOUT_MS / 1000);
+    client.print("POST /api/voice HTTP/1.1\r\nHost: " + host + "\r\n"
+                 "Content-Type: audio/L16; rate=16000; channels=1\r\n"
+                 "X-Device: " + String(DEVICE_ID) + "\r\n" +
+                 (cfgToken.length() ? "X-Api-Key: " + cfgToken + "\r\n" : String("")) +
+                 "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
+    uint8_t buf[2048];
+    bool ok = true;
+    for (;;) {
+      size_t n = xStreamBufferReceive(voiceStream, buf, sizeof(buf), pdMS_TO_TICKS(50));
+      if (n > 0) {
+        client.printf("%X\r\n", (unsigned)n);
+        if (client.write(buf, n) != n) { ok = false; break; }
+        client.print("\r\n");
+      } else if (!voiceRecording && xStreamBufferIsEmpty(voiceStream)) {
+        break;
+      }
+    }
+    if (ok) {
+      client.print("0\r\n\r\n");
+      voiceState = VS_THINK;
+      String status = client.readStringUntil('\n');
+      long length = -1;
+      for (;;) {                                   // заголовки ответа
+        String line = client.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) break;
+        if (line.startsWith("Content-Length:") || line.startsWith("content-length:")) {
+          length = line.substring(15).toInt();
+        }
+      }
+      if (status.indexOf(" 200") > 0) {
+        voiceState = VS_SPEAK;
+        AudioOut* out = makeAudioOut();
+        bool play = out->begin();
+        unsigned long t0 = millis();
+        long got = 0;
+        int16_t pcm[512];
+        while ((length < 0 || got < length) && (client.connected() || client.available())) {
+          int n = client.read((uint8_t*)pcm, sizeof(pcm));
+          if (n <= 0) { vTaskDelay(1); continue; }
+          if (play) out->write(pcm, n / 2);
+          got += n;
+        }
+        // Звук играет в браузере — держим «Speaking...», пока длится ответ
+        unsigned long durMs = got * 1000UL / (VOICE_RATE * 2);
+        while (AUDIO_OUT == AUDIO_NONE && millis() - t0 < durMs) vTaskDelay(50);
+        out->end();
+        delete out;
+        result = 1;
+      } else {
+        Serial.printf("Голос: сервер ответил %s\n", status.c_str());
+      }
+    }
+  } else {
+    Serial.println("Голос: нет связи с сервером");
+  }
+  client.stop();
+  voiceResult = result;
+  voiceTaskHandle = nullptr;
+  vTaskDelete(nullptr);
+}
+
+// Запись фразы с MAX9814: 16 кГц, DC убираем, конец — по тишине
+void recordPhrase() {
+  const unsigned long periodUs = 1000000UL / VOICE_RATE;
+  const int BLOCK = VOICE_RATE / 10;               // 100 мс — блок для уровня громкости
+  int16_t block[160];
+  int fill = 0, bmin = 4095, bmax = 0, inBlock = 0;
+  float dc = 2048;
+  bool spoke = false;
+  long samples = 0;
+  unsigned long start = millis(), lastLoud = millis();
+  xSemaphoreTake(adcMutex, portMAX_DELAY);
+  unsigned long next = micros();
+  while (millis() - start < PHRASE_MAX_MS) {
+    while ((long)(micros() - next) < 0) {}
+    next += periodUs;
+    int v = analogRead(PIN_MIC);
+    samples++;
+    dc += (v - dc) * 0.001f;
+    block[fill++] = constrain((int)((v - dc) * 16), -32767, 32767);
+    if (fill == 160) {                             // 10 мс — отдаём на отправку
+      xStreamBufferSend(voiceStream, block, sizeof(block), 0);
+      fill = 0;
+    }
+    if (v < bmin) bmin = v;
+    if (v > bmax) bmax = v;
+    if (++inBlock >= BLOCK) {
+      if (bmax - bmin > SPEECH_LEVEL) { spoke = true; lastLoud = millis(); }
+      bmin = 4095; bmax = 0; inBlock = 0;
+      if (spoke && millis() - lastLoud > SILENCE_END_MS) break;
+      if (!spoke && millis() - start > NO_SPEECH_MS) break;
+    }
+  }
+  xSemaphoreGive(adcMutex);
+  if (fill) xStreamBufferSend(voiceStream, block, fill * 2, 0);
+  // Для ручной проверки: частота должна быть ≈ 16000 (иначе analogRead не успевает)
+  unsigned long ms = millis() - start;
+  Serial.printf("Голос: записано %.1f с, частота %ld Гц, речь: %s\n", ms / 1000.0,
+                ms ? samples * 1000L / (long)ms : 0, spoke ? "да" : "нет");
+}
+
+void voiceDialog() {
+  if (!wifiOk || !serverOk || cfgServer.length() == 0) {
+    toast("No server for voice");
+    return;
+  }
+  if (!voiceStream) voiceStream = xStreamBufferCreate(32768, 1);   // ≈ 1 с запаса
+  xStreamBufferReset(voiceStream);
+  voiceBusy = true;
+  voiceResult = 0;
+  voiceRecording = true;
+  voiceState = VS_LISTEN;
+  renderFrame();
+  xTaskCreatePinnedToCore(voiceTask, "voice", 8192, nullptr, 1, &voiceTaskHandle, 0);
+  recordPhrase();
+  voiceRecording = false;
+  voiceState = VS_THINK;
+  unsigned long t0 = millis();
+  while (voiceResult == 0 && millis() - t0 < VOICE_TIMEOUT_MS + 5000) {
+    renderFrame();                                 // экран живёт: Thinking... / Speaking...
+    delay(100);
+  }
+  if (voiceResult != 1) toast("Voice error");
+  voiceState = VS_IDLE;
+  voiceBusy = false;
+}
+
 // ===== Команды хлопками =====
 void runCommand(int claps) {
-  if (claps == 1) {
+  if (claps == 1 && VOICE_ENABLED && !setupMode) {
+    voiceDialog();                            // 1 хлопок — «слушаю» (V2)
+  } else if (claps == 1) {
     toast("Hello! I am listening");          // 1 хлопок — приветствие
   } else if (claps == 2) {
     water("claps");                           // 2 хлопка — полив
