@@ -1,0 +1,47 @@
+# Фронтенд + прокси к бэкенду. Пароль веба проверяет бэкенд (/web/api/auth):
+# без входа не отдаются ни страница, ни данные. API устройства (/api/) — по токену, без пароля.
+server {
+    listen 80;
+    server_tokens off;
+    client_max_body_size 4m;          # фраза с устройства ≤ 8 с (256 КБ), запись из браузера ≤ 2 МБ
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    location = /_auth {
+        internal;
+        proxy_pass ${BACKEND_URL}/web/api/auth;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Authorization $http_authorization;
+    }
+
+    location /api/ {
+        proxy_pass ${BACKEND_URL};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 90s;           # голос: распознавание + ИИ + синтез
+    }
+
+    location /web/api/ {
+        proxy_pass ${BACKEND_URL};
+        proxy_set_header Host $host;
+        proxy_read_timeout 90s;
+    }
+
+    location = /health {
+        proxy_pass ${BACKEND_URL};
+    }
+
+    # 401 от бэкенда вместе с его WWW-Authenticate nginx отдаёт как есть — браузер спросит пароль
+    location / {
+        auth_request /_auth;
+        root /usr/share/nginx/html;
+        try_files $uri /index.html;
+    }
+
+    location /assets/ {
+        auth_request /_auth;
+        root /usr/share/nginx/html;
+        expires 30d;
+    }
+}

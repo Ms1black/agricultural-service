@@ -1,4 +1,4 @@
-"""Веб-интерфейс: дашборд, ручной полив, калибровка, чат с ИИ, выгрузка CSV. Всё под HTTP Basic."""
+"""API веб-интерфейса (фронтенд — frontend/, nginx): всё под HTTP Basic."""
 
 import csv
 import io
@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from .. import calibration as cb
@@ -17,7 +17,6 @@ from ..llm.context import build_messages
 
 router = APIRouter(dependencies=[Depends(require_web)])
 
-INDEX_HTML = Path(__file__).with_name("index.html")
 EXPORT_TABLES = {
     "measurements": "SELECT id, ts, device, temp, air_hum, soil_raw, soil_pct, soil_ok, "
                     "soil_dry_d0 FROM measurements ORDER BY id",
@@ -67,9 +66,10 @@ def ask_llm(request: Request, device: str, history: list[dict]) -> dict:
     return {"answer": answer, "provider": llm.name}
 
 
-@router.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return INDEX_HTML.read_text(encoding="utf-8")
+@router.get("/web/api/auth", status_code=204)
+def auth_check() -> Response:
+    """Проверка пароля для nginx (auth_request): фронтенд отдаётся только после входа."""
+    return Response(status_code=204)
 
 
 @router.get("/web/api/devices")
@@ -168,10 +168,11 @@ async def voice(request: Request, device: str = "plant1") -> dict:
 
 
 @router.get("/web/api/voice/log")
-def voice_log(request: Request, device: str | None = None, after: int = 0) -> dict:
+def voice_log(request: Request, device: str | None = None, after: int = 0,
+              limit: int = 30) -> dict:
     from .. import voice as v
     return {"enabled": request.app.state.stt is not None,
-            "items": v.log(request.app.state.db, device, after)}
+            "items": v.log(request.app.state.db, device, after, max(1, min(limit, 500)))}
 
 
 @router.get("/web/api/voice/{vid}.wav")

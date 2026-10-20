@@ -1,14 +1,16 @@
 # Развёртывание сервиса на облачном сервере
 
+Коротко и полностью — в [README.md](../README.md). Команды `docker compose` — из корня репозитория.
+
 Нужно: Linux, Docker с плагином compose, ≥ 4 ГБ RAM (под голос в будущем), открытый порт 8000.
 
 ```bash
 git clone https://github.com/Ms1black/agricultural-service.git
-cd agricultural-service/server
-cp .env.example .env
+cd agricultural-service
+cp server/.env.example server/.env
 # Сгенерировать токен устройства и пароль веба:
 python3 -c "import secrets; print(secrets.token_urlsafe(24))"
-nano .env          # PLANT_TOKEN, PLANT_WEB_PASSWORD
+nano server/.env   # PLANT_TOKEN, PLANT_WEB_PASSWORD
 docker compose up -d --build
 docker compose ps  # статус должен стать healthy
 curl http://localhost:8000/health

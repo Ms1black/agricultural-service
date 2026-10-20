@@ -1,0 +1,29 @@
+# Весь сервис: бэкенд (FastAPI, ML, голос) + фронтенд (React, nginx).
+#   cp server/.env.example server/.env   # заполнить токен, пароль, ключ GigaChat
+#   docker compose up -d --build
+# Снаружи открыт только nginx: порт ${PLANT_PORT:-8000} — тот же адрес и для сайта, и для устройства.
+services:
+  plant:
+    build: ./server
+    image: plant-service
+    restart: unless-stopped
+    env_file: ./server/.env
+    volumes:
+      - plant-data:/data
+    expose:
+      - "8000"
+
+  web:
+    build: ./frontend
+    image: plant-web
+    restart: unless-stopped
+    ports:
+      - "${PLANT_PORT:-8000}:80"
+    depends_on:
+      plant:
+        condition: service_healthy
+
+volumes:
+  plant-data:
+    # то же имя, что у прежнего server/docker-compose.yml, — база и модели сохраняются
+    name: server_plant-data

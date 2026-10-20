@@ -46,14 +46,43 @@ jobs:
       - run: ruff check .
       - run: pytest -q
 
-  docker:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build      # проверка типов + сборка
+
+  compose:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t plant-service server
-      # Контейнер должен стартовать и пройти /health
+      - name: server/.env для проверки
+        run: |
+          cp server/.env.example server/.env
+          {
+            echo PLANT_TOKEN=ci-token
+            echo PLANT_WEB_PASSWORD=ci-pass
+            echo VOICE_PRELOAD=0
+            echo ML_RETRAIN_HOURS=0
+          } >> server/.env
+      - run: docker compose up -d --build
+      # Оба контейнера поднялись; вход по паролю и API устройства работают через nginx
       - run: |
-          docker run -d --name plant -p 8000:8000 \
-            -e PLANT_TOKEN=ci -e PLANT_WEB_PASSWORD=ci plant-service
-          for i in $(seq 1 30); do curl -fs localhost:8000/health && exit 0; sleep 1; done
-          docker logs plant; exit 1
+          for i in $(seq 1 60); do curl -fs localhost:8000/health && break; sleep 2; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/)" = 401
+          curl -fs -u admin:ci-pass localhost:8000/ | grep -q '<div id="root">'
+          curl -fs -u admin:ci-pass localhost:8000/web/api/assistant
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/web/api/state)" = 401
+          body='{"device":"ci","soil_raw":2500,"soil_pct":50,"soil_ok":true,"soil_dry":false}'
+          curl -fs -X POST -H 'Content-Type: application/json' -H 'X-Api-Key: ci-token' -d "$body" localhost:8000/api/telemetry | grep -q '"command":"none"'
+      - if: failure()
+        run: docker compose logs
