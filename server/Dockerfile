@@ -4,8 +4,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PLANT_DB=/data/plant.db \
     GIGACHAT_CA_BUNDLE=/srv/certs/russian_trusted_root_ca.pem
 WORKDIR /srv
 
-COPY requirements.txt .
+COPY requirements.txt requirements-voice.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+# Голос (V1): torch — только CPU-сборка (иначе +2 ГБ CUDA). VOICE=0 — образ без голоса.
+ARG VOICE=1
+RUN if [ "$VOICE" = "1" ]; then \
+      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.8.0 && \
+      pip install --no-cache-dir -r requirements-voice.txt; \
+    fi
 
 COPY certs ./certs
 COPY app ./app

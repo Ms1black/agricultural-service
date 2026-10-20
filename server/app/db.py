@@ -59,6 +59,29 @@ MIGRATIONS: list[list[str]] = [
         )""",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_models_task_version ON models(task, version)",
     ],
+    # 3 — голос (V1) и причина последней отданной команды полива
+    [
+        """CREATE TABLE IF NOT EXISTS voice_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            device TEXT NOT NULL,
+            transcript TEXT,
+            answer TEXT,
+            intent TEXT,
+            ms_stt INTEGER,
+            ms_llm INTEGER,
+            ms_tts INTEGER,
+            audio_path TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_voice_log_device_ts ON voice_log(device, ts)",
+        # Прошивка помечает любой полив по команде сервера как "web" — помним настоящую причину
+        """CREATE TABLE IF NOT EXISTS taken_commands (
+            device TEXT PRIMARY KEY,
+            note TEXT,
+            seconds INTEGER,
+            taken REAL NOT NULL
+        )""",
+    ],
 ]
 
 

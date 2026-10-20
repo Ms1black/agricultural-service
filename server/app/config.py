@@ -21,6 +21,12 @@ class Settings:
     command_ttl_s: int = 120
     # Файлы моделей (M1); пусто — рядом с базой: <каталог PLANT_DB>/models
     models_dir: str = ""
+    # Голос (V1): STT faster-whisper, TTS Silero. Выключен — /api/voice отвечает 503.
+    voice_enabled: bool = False
+    # Загрузить модели голоса при старте (иначе — при первой фразе, это 10–60 с)
+    voice_preload: bool = False
+    whisper_model: str = "small"
+    tts_speaker: str = "aidar"
     # LLM (задача L1): gigachat | openai | none. Без ключа LLM выключена.
     llm_provider: str = "gigachat"
     llm_timeout_s: float = 30
@@ -42,6 +48,11 @@ class Settings:
             web_password=os.environ.get("PLANT_WEB_PASSWORD", ""),
             insecure=_flag("PLANT_INSECURE"),
             models_dir=os.environ.get("PLANT_MODELS_DIR", ""),
+            voice_enabled=os.environ.get("VOICE_ENABLED", "1").strip().lower() in ("1", "true",
+                                                                                  "yes", "on"),
+            voice_preload=_flag("VOICE_PRELOAD"),
+            whisper_model=os.environ.get("WHISPER_MODEL", cls.whisper_model),
+            tts_speaker=os.environ.get("TTS_SPEAKER", cls.tts_speaker),
             llm_provider=os.environ.get("LLM_PROVIDER", cls.llm_provider).strip().lower(),
             llm_timeout_s=float(os.environ.get("LLM_TIMEOUT_S", cls.llm_timeout_s)),
             gigachat_auth_key=os.environ.get("GIGACHAT_AUTH_KEY", "").strip(),
@@ -57,6 +68,11 @@ class Settings:
     def models_path(self) -> str:
         return self.models_dir or os.path.join(os.path.dirname(os.path.abspath(self.db_path)),
                                                "models")
+
+    @property
+    def voice_path(self) -> str:
+        """Записанные ответы голосового помощника (WAV)."""
+        return os.path.join(os.path.dirname(os.path.abspath(self.db_path)), "voice")
 
     def check(self) -> None:
         """На облаке токен и пароль обязательны: без них сервис не стартует."""

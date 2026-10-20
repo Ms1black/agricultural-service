@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .. import store
@@ -138,6 +138,47 @@ def chat(req: ChatRequest, request: Request) -> dict:
 @router.post("/web/api/why")
 def why(req: WhyRequest, request: Request) -> dict:
     return ask_llm(request, req.device, [{"role": "user", "content": WHY_QUESTION}])
+
+
+@router.post("/web/api/voice")
+async def voice(request: Request, device: str = "plant1") -> dict:
+    """Фраза с микрофона браузера (webm/ogg/wav) → ответ; звук — /web/api/voice/<id>.wav."""
+    import io
+
+    from starlette.concurrency import run_in_threadpool
+
+    from .. import voice as v
+    st = request.app.state
+    if st.stt is None:
+        raise HTTPException(503, "голос выключен")
+    body = await request.body()
+    if not 1000 < len(body) <= 2_000_000:
+        raise HTTPException(400, "запись пустая или слишком длинная")
+    try:
+        r = await run_in_threadpool(v.handle, st.db, st.llm, st.stt, st.tts,
+                                    st.settings.voice_path, device, io.BytesIO(body))
+    except v.engines.VoiceUnavailable as e:
+        raise HTTPException(503, f"голос недоступен: {e}") from e
+    except Exception as e:  # не удалось декодировать запись
+        raise HTTPException(400, f"не удалось распознать запись: {e}") from e
+    return {"id": r.id, "transcript": r.transcript, "answer": r.answer, "intent": r.intent,
+            "ms_stt": r.ms_stt, "ms_llm": r.ms_llm, "ms_tts": r.ms_tts}
+
+
+@router.get("/web/api/voice/log")
+def voice_log(request: Request, device: str | None = None, after: int = 0) -> dict:
+    from .. import voice as v
+    return {"enabled": request.app.state.stt is not None,
+            "items": v.log(request.app.state.db, device, after)}
+
+
+@router.get("/web/api/voice/{vid}.wav")
+def voice_audio(vid: int, request: Request) -> FileResponse:
+    from .. import voice as v
+    path = v.audio_path(request.app.state.db, vid)
+    if not path or not Path(path).exists():
+        raise HTTPException(404, "нет записи")
+    return FileResponse(path, media_type="audio/wav")
 
 
 @router.get("/web/api/export.csv")
