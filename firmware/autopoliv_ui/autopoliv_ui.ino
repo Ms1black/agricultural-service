@@ -503,10 +503,12 @@ void drawToast() {
 }
 
 // ===== Персонаж «Джарвис» =====
-void drawJarvis(int x, int y, int scale) {
+void drawJarvis(int x, int y, int scale, bool squint = false) {
   for (int j = 0; j < JARVIS_H; j++) {
+    bool sq = squint && j >= JARVIS_SQUINT_FROM && j < JARVIS_SQUINT_FROM + 3;
+    const char* row = sq ? JARVIS_SQUINT[j - JARVIS_SQUINT_FROM] : JARVIS[j];
     for (int i = 0; i < JARVIS_W; i++) {
-      char ch = JARVIS[j][i];
+      char ch = row[i];
       if (ch == '.') continue;
       const uint8_t* c = JARVIS_RGB[ch - 'a'];
       canvas.fillRect(x + i * scale, y + j * scale, scale, scale, canvas.color565(c[0], c[1], c[2]));
@@ -533,7 +535,7 @@ void renderFrame() {
 void renderWatering(const String& reason) {
   const int s = 5, w = JARVIS_W * s, x0 = (160 - w) / 2, y0 = 30;
   canvas.fillScreen(C_BG);
-  drawJarvis(x0, y0, s);
+  drawJarvis(x0, y0, s, true);         // жмурится от брызг
   uint16_t blue = canvas.color565(70, 150, 230);
   unsigned long t = millis();
   const int cols[] = {x0 + 8, x0 + 30, x0 + 52, x0 + 70, x0 + 18, x0 + 60};

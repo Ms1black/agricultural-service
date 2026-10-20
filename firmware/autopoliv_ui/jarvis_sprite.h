@@ -22,6 +22,14 @@ static const char* const JARVIS[JARVIS_H] = {
   "..bbaa..aabc...",
 };
 
+// При поливе жмурится от брызг: строки 7–9 с глазами «> <» вместо обычных
+static const int JARVIS_SQUINT_FROM = 7;
+static const char* const JARVIS_SQUINT[3] = {
+  "cdddfddddfdddc.",
+  "cddddfddfddddc.",
+  "cdddfddddfdddc.",
+};
+
 // Цвета букв a, b, c… (RGB)
 static const uint8_t JARVIS_RGB[][3] = {
   {121, 255, 49},   // a — светло-зелёный (стебель, блики)
