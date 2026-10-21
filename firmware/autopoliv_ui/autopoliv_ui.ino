@@ -68,6 +68,9 @@ const unsigned long COOLDOWN_MS = 60000;
 const int AUTO_STREAK_MAX = 3;
 const int AUTO_STREAK_RISE = 5;     // столько % прибавки — полив помог, счёт сначала
 const bool AUTO_WATER = true;
+// Полив по команде сервера (сайт, голос, режим ml) выключен: поливаем только по порогу 30 %.
+// Вернуть — true
+const bool SERVER_WATER = false;
 // Режим ml (D0): поливает сервер по прогнозу, локальный порог молчит — но только пока
 // сервер на связи. Без ответа сервера дольше этого времени — снова локальный порог.
 const unsigned long SERVER_ML_TIMEOUT_MS = 600000;
@@ -715,7 +718,9 @@ void handleResponse(const String& resp) {
   nextWaterH = doc["next_water_h"] | -1;
   nextWaterAt = millis();
 
-  if (doc["command"] == "water") {
+  if (doc["command"] == "water" && !SERVER_WATER) {
+    Serial.println("Сервер просит полить — игнорирую (SERVER_WATER = false)");
+  } else if (doc["command"] == "water") {
     int sec = constrain(doc["seconds"] | 3, 1, 10);
     water("web", sec * 1000UL);
   }
@@ -761,7 +766,7 @@ void flushBuffer() {
 
 // Сервер в режиме ml и отвечал недавно — локальный автополив не нужен
 bool serverDecides() {
-  return serverMl && millis() - serverMlAt < SERVER_ML_TIMEOUT_MS;
+  return SERVER_WATER && serverMl && millis() - serverMlAt < SERVER_ML_TIMEOUT_MS;
 }
 
 // ===== Досветка =====
