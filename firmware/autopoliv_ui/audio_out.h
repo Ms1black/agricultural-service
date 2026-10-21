@@ -10,9 +10,9 @@
 #ifndef VOICE_ENABLED
 #define VOICE_ENABLED 1
 #endif
-// Куда выводить ответ: AUDIO_NONE — звучит в браузере (дашборд, V1b), по умолчанию;
-// AUDIO_PDM — I2S PDM на один вывод → RC-фильтр → PAM8403/LM386 → динамик 8 Ом;
-// AUDIO_I2S_MAX98357 — I2S на усилитель MAX98357A.
+// Куда выводить ответ: AUDIO_I2S_MAX98357 — I2S на усилитель MAX98357A, по умолчанию;
+// AUDIO_NONE — звучит только в браузере (дашборд, V1b);
+// AUDIO_PDM — I2S PDM на один вывод → RC-фильтр → PAM8403/LM386 → динамик 8 Ом.
 #define AUDIO_NONE 0
 #define AUDIO_PDM 1
 #define AUDIO_I2S_MAX98357 2
@@ -27,14 +27,14 @@ static const unsigned long WAKE_MIN_MS = 250;         // столько подр
 static const unsigned long WAKE_GAP_MS = 120;         // паузы между слогами короче — не обрыв
 static const unsigned long WAKE_BACKOFF_MS = 2000;    // после фразы без обращения
 static const unsigned long WAKE_BUSY_MS = 30000;      // сервер ответил 429 — много лишних фраз
-#ifndef AUDIO_OUT              // можно задать флагом сборки: -D AUDIO_OUT=AUDIO_PDM
-#define AUDIO_OUT AUDIO_NONE
+#ifndef AUDIO_OUT              // можно задать флагом сборки: -D AUDIO_OUT=AUDIO_NONE
+#define AUDIO_OUT AUDIO_I2S_MAX98357
 #endif
-// Выводы звука — УТОЧНИТЬ У ЧЕЛОВЕКА перед включением (правило 3); при AUDIO_NONE не используются
-#define PIN_AUDIO_PDM   6       // PDM: данные (кандидаты верхнего ряда: 6, 7)
-#define PIN_I2S_BCLK    6       // MAX98357A: BCLK
-#define PIN_I2S_LRC     7       // MAX98357A: LRC
-#define PIN_I2S_DIN     -1      // MAX98357A: DIN — один пин нижнего ряда, уточнить
+// Выводы звука (docs/pinout.md); при AUDIO_NONE не используются
+#define PIN_AUDIO_PDM   6       // PDM: данные — УТОЧНИТЬ У ЧЕЛОВЕКА (правило 3), кандидаты: 6, 7
+#define PIN_I2S_BCLK    6       // MAX98357A: BCLK (согласовано)
+#define PIN_I2S_LRC     7       // MAX98357A: LRC  (согласовано)
+#define PIN_I2S_DIN     17      // MAX98357A: DIN  (согласовано)
 static const float AUDIO_VOLUME = 0.5f;               // громкость ~50 % (динамик 0.5 Вт)
 static const int VOICE_RATE = 16000;
 static const unsigned long PHRASE_MAX_MS = 8000;      // контракт 4.3: фраза ≤ 8 с

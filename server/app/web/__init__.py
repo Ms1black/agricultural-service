@@ -15,7 +15,7 @@ from ..auth import require_web
 from ..llm import LLMError
 from ..llm.context import build_messages
 
-router = APIRouter(dependencies=[Depends(require_web)])
+router = APIRouter(tags=["Веб (HTTP Basic)"], dependencies=[Depends(require_web)])
 
 EXPORT_TABLES = {
     "measurements": "SELECT id, ts, device, temp, air_hum, soil_raw, soil_pct, soil_ok, "

@@ -22,3 +22,11 @@ server/data/
 # IDE
 .vscode/
 .idea/
+
+# Xcode (локальная подпись и настройки разработчика)
+xcuserdata/
+*.xcuserstate
+watch/build/
+watch/DerivedData/
+watch/.build/
+watch/.swiftpm/

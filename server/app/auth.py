@@ -2,12 +2,14 @@
 
 import secrets
 
-from fastapi import Depends, Header, HTTPException, Request, status
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import APIKeyHeader, HTTPBasic, HTTPBasicCredentials
 
 from .config import Settings
 
 _basic = HTTPBasic(auto_error=False)
+# Схемы безопасности — ещё и для кнопки Authorize в Swagger (/web/api/docs)
+_api_key = APIKeyHeader(name="X-Api-Key", auto_error=False)
 
 
 def get_settings(request: Request) -> Settings:
@@ -20,7 +22,7 @@ def _eq(a: str, b: str) -> bool:
 
 def require_device(
     settings: Settings = Depends(get_settings),
-    x_api_key: str | None = Header(default=None),
+    x_api_key: str | None = Depends(_api_key),
 ) -> None:
     if not settings.token:
         return

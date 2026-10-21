@@ -6,6 +6,20 @@ on:
   pull_request:
 
 jobs:
+  watch:
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test watch API client
+        run: swift test --package-path watch
+      - name: Build watchOS app without signing
+        run: >-
+          xcodebuild -project watch/PlantWatch.xcodeproj -scheme PlantWatch
+          -configuration Release -sdk watchos -destination 'generic/platform=watchOS'
+          -derivedDataPath "$RUNNER_TEMP/plant-watch-build" CODE_SIGNING_ALLOWED=NO build
+
   firmware:
     runs-on: ubuntu-latest
     steps:

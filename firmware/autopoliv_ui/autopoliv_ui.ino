@@ -1,5 +1,5 @@
 // Прошивка автополива: интерфейс в стиле e-paper (ESP32-S3 + ST7735 1.77", 160x128)
-// Библиотеки (Менеджер библиотек): LovyanGFX, Adafruit AHTX0
+// Библиотеки (Менеджер библиотек): LovyanGFX, Adafruit AHTX0, BH1750 (claws)
 // Adafruit ST7735 и Adafruit GFX для этой прошивки больше не нужны.
 
 #define LGFX_USE_V1
@@ -8,11 +8,13 @@
 #include <HTTPClient.h>
 #include <Wire.h>
 #include <Adafruit_AHTX0.h>
+#include <BH1750.h>
 #include <Preferences.h>
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <ArduinoJson.h>
 #include <freertos/stream_buffer.h>
+#include <driver/gpio.h>
 #include "audio_out.h"   // голос (V2): настройки и вывод звука
 #include "jarvis_sprite.h"   // персонаж «Джарвис» для экрана
 #include <time.h>
@@ -30,7 +32,7 @@ const char* SERVER     = "";
 const char* API_TOKEN  = "";
 #endif
 const char* DEVICE_ID  = "plant1";
-const char* FW_VERSION = "1.1.0";
+const char* FW_VERSION = "1.2.0";
 
 // ===== Режим настройки =====
 // Нет сети / не подключился за 10 с / 3 хлопка → точка доступа, форма на http://192.168.4.1
@@ -46,7 +48,11 @@ const unsigned long SEND_INTERVAL = 30000;
 #define PIN_RELAY   5     // IN реле
 #define RELAY_ON    LOW   // если реле работает наоборот — поменяйте на HIGH
 #define RELAY_OFF   (!RELAY_ON)
+#define PIN_I2C_SDA 8     // AHT20 и BH1750 — на одной шине I2C
+#define PIN_I2C_SCL 9
+#define PIN_LAMP    18    // светодиоды досветки: напрямую, без резистора — ток ограничен драйвером пина
 // Дисплей: CS 10, SDA 11, SCK 12, RS 13, RES 14 — задаются в классе LGFX ниже
+// Звук (MAX98357A: 6 / 7 / 17) — в audio_out.h. Вся распиновка — docs/pinout.md
 
 // ===== Микрофон =====
 int CLAP_THRESHOLD = 2000;
@@ -61,6 +67,11 @@ const bool AUTO_WATER = true;
 // Режим ml (D0): поливает сервер по прогнозу, локальный порог молчит — но только пока
 // сервер на связи. Без ответа сервера дольше этого времени — снова локальный порог.
 const unsigned long SERVER_ML_TIMEOUT_MS = 600000;
+
+// ===== Досветка: лампа на PIN_LAMP по освещённости BH1750 =====
+const bool LAMP_AUTO = true;
+const float LAMP_ON_LUX = 300, LAMP_OFF_LUX = 600;    // гистерезис: лампа может подсвечивать датчик
+const unsigned long LAMP_MIN_SWITCH_MS = 60000;       // по свету переключаем не чаще раза в минуту
 
 int soilDryCal = 4000;
 int soilWetCal = 1150;
@@ -123,6 +134,10 @@ uint16_t C_BG, C_INK, C_MUTED, C_FAINT;
 
 Adafruit_AHTX0 aht;
 bool ahtOk = false;
+BH1750 lightMeter;                  // освещённость, адрес 0x23 (ADDR на GND или не подключён)
+bool bhOk = false;
+bool lampOn = false;
+unsigned long lampSwitchedAt = 0;
 
 SemaphoreHandle_t adcMutex;
 
@@ -155,6 +170,7 @@ struct Sample {
   float temp, hum;
   int raw, pct;
   bool dry;
+  float lux;
 };
 const int BUF_N = 240;              // 240 × 30 с = 2 часа
 Sample sampleBuf[BUF_N];
@@ -162,6 +178,7 @@ int bufHead = 0, bufCount = 0;
 const int FLUSH_PER_SEND = 10;      // за раз досылаем не больше 10, чтобы не тормозить экран
 
 float curTemp = NAN, curHum = NAN;
+float curLux = NAN;
 int   curSoil = -1;
 int   soilRaw = 0, soilSpread = 0;
 bool  soilDry = false;
@@ -426,7 +443,16 @@ void drawCell(int x, int y, int w, int h, const char* label, bool degree, const 
   canvas.setTextColor(fg);
   canvas.setFont(&fonts::FreeSansBold18pt7b);
   if (canvas.textWidth(value) > w - 10) canvas.setFont(&fonts::FreeSansBold12pt7b);
+  if (canvas.textWidth(value) > w - 10) canvas.setFont(&fonts::FreeSansBold9pt7b);   // узкая ячейка
   canvas.drawString(value, x + 5, y + h - 4);
+}
+
+// Освещённость коротко: 850, 1.2k, 12k
+String luxText(float lux) {
+  if (isnan(lux)) return "--";
+  if (lux < 1000) return String((int)round(lux));
+  if (lux < 10000) return String(lux / 1000, 1) + "k";
+  return String((int)round(lux / 1000)) + "k";
 }
 
 bool clockOk() { return time(nullptr) > 1700000000; }
@@ -461,15 +487,22 @@ void drawMainScreen() {
   drawCell(w, top, w, h, "Temp, ", true, "C",
            isnan(curTemp) ? String("--") : String(curTemp, 1), false);
 
+  // Нижний ряд: с BH1750 — три узкие ячейки (воздух, свет, полив), без него — две, как раньше
+  const int y2 = top + h + 1;
+  const int wn = bhOk ? 53 : w, xNext = bhOk ? 106 : w, wNext = 160 - xNext;
+
   // Влажность воздуха
-  drawCell(0, top + h + 1, w, h, "Air RH, %", false, "",
+  drawCell(0, y2, wn, h, bhOk ? "RH, %" : "Air RH, %", false, "",
            isnan(curHum) ? String("--") : String((int)round(curHum)), false);
+
+  // Освещённость
+  if (bhOk) drawCell(wn, y2, wn, h, "Lux", false, "", luxText(curLux), false);
 
   // Следующий полив по прогнозу сервера; без связи — время с последнего полива, как раньше
   if (nextWaterH >= 0 && serverOk && millis() - nextWaterAt < NEXT_FRESH_MS) {
-    drawCell(w, top + h + 1, w, h, "Next", false, "", nextText(nextWaterH), false);
+    drawCell(xNext, y2, wNext, h, "Next", false, "", nextText(nextWaterH), false);
   } else {
-    drawCell(w, top + h + 1, w, h, "Watered", false, "", agoText(), false);
+    drawCell(xNext, y2, wNext, h, "Watered", false, "", agoText(), false);
   }
 }
 
@@ -624,12 +657,12 @@ void water(String reason, unsigned long ms = WATER_MS) {
 }
 
 void handleResponse(const String& resp);
-String telemetryJson(float temp, float hum, int raw, int pct, bool dry, long ageS);
+String telemetryJson(float temp, float hum, int raw, int pct, bool dry, float lux, long ageS);
 void bufferSample();
 void flushBuffer();
 
 void sendTelemetry() {
-  String body = telemetryJson(curTemp, curHum, soilRaw, curSoil, soilDry, 0);
+  String body = telemetryJson(curTemp, curHum, soilRaw, curSoil, soilDry, curLux, 0);
 
   String resp;
   serverOk = postJson("/api/telemetry", body, &resp);
@@ -673,7 +706,7 @@ void handleResponse(const String& resp) {
   }
 }
 
-String telemetryJson(float temp, float hum, int raw, int pct, bool dry, long ageS) {
+String telemetryJson(float temp, float hum, int raw, int pct, bool dry, float lux, long ageS) {
   String body = "{";
   body += "\"device\":\"" + String(DEVICE_ID) + "\",";
   body += "\"temp\":" + numOrNull(temp, 2) + ",";
@@ -682,6 +715,7 @@ String telemetryJson(float temp, float hum, int raw, int pct, bool dry, long age
   body += "\"soil_pct\":" + String(pct) + ",";
   body += "\"soil_ok\":" + String(pct >= 0 ? "true" : "false") + ",";
   body += "\"soil_dry\":" + String(dry ? "true" : "false") + ",";
+  if (!isnan(lux)) body += "\"lux\":" + String(lux, 1) + ",";   // BH1750; нет датчика — поля нет
   if (ageS > 0) body += "\"age_s\":" + String(ageS) + ",";
   body += "\"uptime_s\":" + String(millis() / 1000) + ",";
   body += "\"fw_version\":\"" + String(FW_VERSION) + "\"";
@@ -690,7 +724,7 @@ String telemetryJson(float temp, float hum, int raw, int pct, bool dry, long age
 }
 
 void bufferSample() {
-  sampleBuf[bufHead] = {millis(), curTemp, curHum, soilRaw, curSoil, soilDry};
+  sampleBuf[bufHead] = {millis(), curTemp, curHum, soilRaw, curSoil, soilDry, curLux};
   bufHead = (bufHead + 1) % BUF_N;
   if (bufCount < BUF_N) bufCount++;    // переполнение — затираем самые старые
 }
@@ -702,8 +736,10 @@ void flushBuffer() {
     int i = (bufHead - bufCount + BUF_N) % BUF_N;
     const Sample& s = sampleBuf[i];
     long age = (millis() - s.ms) / 1000;
-    if (!postJson("/api/telemetry", telemetryJson(s.temp, s.hum, s.raw, s.pct, s.dry, age),
-                  nullptr)) return;
+    if (!postJson("/api/telemetry",
+                  telemetryJson(s.temp, s.hum, s.raw, s.pct, s.dry, s.lux, age), nullptr)) {
+      return;
+    }
     bufCount--;
   }
 }
@@ -711,6 +747,29 @@ void flushBuffer() {
 // Сервер в режиме ml и отвечал недавно — локальный автополив не нужен
 bool serverDecides() {
   return serverMl && millis() - serverMlAt < SERVER_ML_TIMEOUT_MS;
+}
+
+// ===== Досветка =====
+void setLamp(bool on) {
+  lampOn = on;
+  lampSwitchedAt = millis();
+  digitalWrite(PIN_LAMP, on ? HIGH : LOW);
+  Serial.printf("Досветка: %s (свет %.0f лк)\n", on ? "вкл" : "выкл", curLux);
+  toast(on ? "Light on" : "Light off");
+}
+
+void updateLamp() {
+  if (!LAMP_AUTO || !bhOk) {                         // без датчика — выключить
+    if (lampOn) setLamp(false);
+    return;
+  }
+  if (isnan(curLux)) return;                         // сбой чтения — оставляем как есть
+  bool want = lampOn;
+  if (curLux < LAMP_ON_LUX) want = true;
+  else if (curLux > LAMP_OFF_LUX) want = false;
+  if (want == lampOn) return;
+  if (lampSwitchedAt && millis() - lampSwitchedAt < LAMP_MIN_SWITCH_MS) return;
+  setLamp(want);
 }
 
 // ===== Датчики =====
@@ -721,13 +780,18 @@ void updateSensors() {
     curTemp = te.temperature;
     curHum = he.relative_humidity;
   }
+  if (bhOk) {                          // непрерывный режим: берём последний готовый замер
+    float lux = lightMeter.readLightLevel();
+    curLux = lux >= 0 ? lux : NAN;     // < 0 — ошибка шины (плохой контакт)
+  }
+  updateLamp();
 
   if (voiceBusy) return;               // АЦП занят записью фразы — замер в следующий раз
   curSoil = readSoilPercent();
   soilDry = digitalRead(PIN_SOIL_D) == HIGH;   // если D0 показывает наоборот — поменяйте на LOW
 
-  Serial.printf("Темп: %.1f C | Воздух: %.1f%% | Почва: %d%% (raw %d) | D0: %s\n",
-                curTemp, curHum, curSoil, soilRaw, soilDry ? "сухо" : "мокро");
+  Serial.printf("Темп: %.1f C | Воздух: %.1f%% | Свет: %.0f лк | Почва: %d%% (raw %d) | D0: %s\n",
+                curTemp, curHum, curLux, curSoil, soilRaw, soilDry ? "сухо" : "мокро");
 
   bool cooldownDone = !everWatered || millis() - lastWater > COOLDOWN_MS;
   if (AUTO_WATER && needWater(curSoil) && cooldownDone && !serverDecides()) {
@@ -1181,6 +1245,10 @@ void runCommand(int claps) {
 void setup() {
   digitalWrite(PIN_RELAY, RELAY_OFF);
   pinMode(PIN_RELAY, OUTPUT);
+  digitalWrite(PIN_LAMP, LOW);
+  pinMode(PIN_LAMP, OUTPUT);
+  // Самый слабый драйвер (~5 мА): светодиоды подключены без резистора. Тускло — GPIO_DRIVE_CAP_1
+  gpio_set_drive_capability((gpio_num_t)PIN_LAMP, GPIO_DRIVE_CAP_0);
 
   Serial.begin(115200);
   delay(1000);
@@ -1201,9 +1269,11 @@ void setup() {
   C_MUTED = canvas.color565(105, 105, 100);   // подписи
   C_FAINT = canvas.color565(190, 190, 185);   // сетка графика
 
-  Wire.begin(8, 9);
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
   ahtOk = aht.begin();
   if (!ahtOk) Serial.println("AHT20 не найден");
+  bhOk = lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
+  if (!bhOk) Serial.println("BH1750 не найден");
 
   loadConfig();
   prefs.begin("state", true);

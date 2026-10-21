@@ -16,7 +16,8 @@ from pydantic import BaseModel, ConfigDict
 from . import calibration, decision, store
 from .auth import require_device
 
-router = APIRouter(prefix="/api", dependencies=[Depends(require_device)])
+router = APIRouter(prefix="/api", tags=["Устройство (X-Api-Key)"],
+                   dependencies=[Depends(require_device)])
 
 
 class Telemetry(BaseModel):
