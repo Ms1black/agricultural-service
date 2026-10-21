@@ -296,9 +296,9 @@ int readSoilPercent() {
     v[j + 1] = x;
   }
   soilRaw = v[N / 2];
-  soilSpread = v[N - 1] - v[0];
+  soilSpread = v[N * 3 / 4] - v[N / 4];   // без крайних значений: одна помеха — не обрыв датчика
 
-  if (soilSpread > 800) return -1;
+  if (soilSpread > 400) return -1;
   return constrain(map(soilRaw, soilDryCal, soilWetCal, 0, 100), 0, 100);
 }
 
@@ -813,8 +813,10 @@ void updateSensors() {
   Serial.printf("Темп: %.1f C | Воздух: %.1f%% | Свет: %.0f лк | Почва: %d%% (raw %d) | D0: %s\n",
                 curTemp, curHum, curLux, curSoil, soilRaw, soilDry ? "сухо" : "мокро");
 
-  bool need = needWater(curSoil);
-  if (!need || (autoStreak && curSoil >= 0 && autoStreakSoil >= 0 &&
+  // Автополив — только по проценту влажности. Запасной путь по D0 убран: одна помеха на АЦП
+  // давала -1, а D0 говорил «сухо» — и насос включался раз в минуту при любой влажности
+  bool need = curSoil >= 0 && curSoil < SOIL_LOW_PERCENT;
+  if (!need || (autoStreak && autoStreakSoil >= 0 &&
                 curSoil >= autoStreakSoil + AUTO_STREAK_RISE)) {
     autoStreak = 0;                    // полив помог или почва уже не сухая
   }
@@ -833,7 +835,7 @@ void updateSensors() {
     }
     if (autoStreak == 0) autoStreakSoil = curSoil;
     autoStreak++;
-    water(curSoil < 0 ? "auto-D0" : "auto");
+    water("auto");
   }
 }
 
