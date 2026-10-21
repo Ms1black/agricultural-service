@@ -1252,6 +1252,7 @@ void setup() {
 
   Serial.begin(115200);
   delay(1000);
+  Serial.printf("Flash: %u МБ, PSRAM: %u КБ\n", ESP.getFlashChipSize() >> 20, ESP.getPsramSize() >> 10);
 
   adcMutex = xSemaphoreCreateMutex();
 
