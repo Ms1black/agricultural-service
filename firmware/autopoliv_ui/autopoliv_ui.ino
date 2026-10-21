@@ -46,7 +46,7 @@ const unsigned long SEND_INTERVAL = 30000;
 #define PIN_SOIL_D  2     // D0 датчика почвы
 #define PIN_SOIL    4     // A0 датчика почвы
 #define PIN_RELAY   5     // IN реле
-#define RELAY_ON    LOW   // если реле работает наоборот — поменяйте на HIGH
+#define RELAY_ON    HIGH  // реле срабатывает от HIGH (при LOW насос работал без остановки); наоборот — LOW
 #define RELAY_OFF   (!RELAY_ON)
 #define PIN_I2C_SDA 8     // AHT20 и BH1750 — на одной шине I2C
 #define PIN_I2C_SCL 9
