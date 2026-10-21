@@ -63,6 +63,10 @@ const unsigned long CLAP_MAX_MS = 150;
 // ===== Полив =====
 const unsigned long WATER_MS    = 3000;
 const unsigned long COOLDOWN_MS = 60000;
+// Автополив подряд без толку (почва не стала влажнее) — датчик врёт или показывает наоборот:
+// после стольких поливов подряд локальный порог замолкает, пока почва не перестанет быть «сухой»
+const int AUTO_STREAK_MAX = 3;
+const int AUTO_STREAK_RISE = 5;     // столько % прибавки — полив помог, счёт сначала
 const bool AUTO_WATER = true;
 // Режим ml (D0): поливает сервер по прогнозу, локальный порог молчит — но только пока
 // сервер на связи. Без ответа сервера дольше этого времени — снова локальный порог.
@@ -150,6 +154,8 @@ unsigned long wakeBackoffUntil = 0;
 
 unsigned long lastWater = 0;
 bool everWatered = false;
+int autoStreak = 0;                 // автополивов подряд без роста влажности
+int autoStreakSoil = -1;            // влажность перед первым из них
 time_t lastWaterEpoch = 0;          // время последнего полива по часам (NTP), хранится в Preferences
 
 // ===== Ответ сервера (F2: ArduinoJson) =====
@@ -802,8 +808,26 @@ void updateSensors() {
   Serial.printf("Темп: %.1f C | Воздух: %.1f%% | Свет: %.0f лк | Почва: %d%% (raw %d) | D0: %s\n",
                 curTemp, curHum, curLux, curSoil, soilRaw, soilDry ? "сухо" : "мокро");
 
+  bool need = needWater(curSoil);
+  if (!need || (autoStreak && curSoil >= 0 && autoStreakSoil >= 0 &&
+                curSoil >= autoStreakSoil + AUTO_STREAK_RISE)) {
+    autoStreak = 0;                    // полив помог или почва уже не сухая
+  }
   bool cooldownDone = !everWatered || millis() - lastWater > COOLDOWN_MS;
-  if (AUTO_WATER && needWater(curSoil) && cooldownDone && !serverDecides()) {
+  if (AUTO_WATER && need && cooldownDone && !serverDecides()) {
+    if (autoStreak >= AUTO_STREAK_MAX) {
+      static unsigned long warnedAt = 0;
+      if (!warnedAt || millis() - warnedAt > COOLDOWN_MS) {
+        warnedAt = millis();
+        Serial.printf("Автополив стоп: %d раз подряд, а почва не влажнее (%d%%, raw %d). "
+                      "Датчик в воде, а raw высокий — поменяйте местами soilDryCal и soilWetCal\n",
+                      autoStreak, curSoil, soilRaw);
+        toast("Check soil sensor", 10000);
+      }
+      return;
+    }
+    if (autoStreak == 0) autoStreakSoil = curSoil;
+    autoStreak++;
     water(curSoil < 0 ? "auto-D0" : "auto");
   }
 }
