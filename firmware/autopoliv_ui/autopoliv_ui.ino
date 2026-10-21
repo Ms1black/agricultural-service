@@ -581,8 +581,9 @@ void drawBlink(int x0, int y0, int s, unsigned long t) {
   }
 }
 
-// Полив: персонаж моргает, капли падают сверху и по бокам (кадр зависит от времени — в цикле)
-void renderWatering(const String& reason) {
+// Полив: персонаж моргает, капли падают сверху и по бокам (кадр зависит от времени — в цикле).
+// stopAt ≠ 0 — насос выключен в этот момент: новые капли не появляются, начатые долетают до конца
+void renderWatering(const String& reason, unsigned long stopAt = 0) {
   const int s = 5, w = JARVIS_W * s, x0 = (160 - w) / 2, y0 = 30;
   canvas.fillScreen(C_BG);
   drawJarvis(x0, y0, s);
@@ -593,12 +594,14 @@ void renderWatering(const String& reason) {
   const int top[] = {x0 + 8, x0 + 30, x0 + 52, x0 + 70, x0 + 18, x0 + 60};
   for (int k = 0; k < 6; k++) {
     int y = (t / 6 + k * 23) % 60;
+    if (stopAt && t - y * 6 > stopAt) continue;        // капля сорвалась уже после полива
     if (y <= 32) drawDrop(top[k], y + 4, 3, blue);
   }
   // по бокам — во всю высоту, до полосы внизу
   const int side[] = {12, 26, 134, 148};
   for (int k = 0; k < 4; k++) {
     int y = (t / 5 + k * 37) % 120;
+    if (stopAt && t - y * 5 > stopAt) continue;
     if (y <= 98) drawDrop(side[k], y + 6, 3, blue);
   }
   drawBar("Watering: " + reason);
@@ -643,6 +646,12 @@ void water(String reason, unsigned long ms = WATER_MS) {
     delay(30);
   }
   digitalWrite(PIN_RELAY, RELAY_OFF);
+  // Анимация до конца: последние капли долетают (боковые — до 98 × 5 мс ≈ 0.5 с)
+  unsigned long stopAt = millis();
+  while (millis() - stopAt < 600) {
+    renderWatering(reason, stopAt);
+    delay(30);
+  }
   lastWater = millis();
   everWatered = true;
   if (clockOk()) {                     // время полива переживает перезагрузку
